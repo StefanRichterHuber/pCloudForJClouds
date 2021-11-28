@@ -1,8 +1,10 @@
 package eu.stefanhuber.jclouds.pcloud.strategy.internal;
 
+import org.jclouds.blobstore.BlobStore;
+
 /**
- * 
- * @author stefan
+ * Exception from PCloud {@link BlobStore}.
+ * @author Stefan Richter-Huber
  *
  */
 public class PCloudBlobStoreException extends RuntimeException {

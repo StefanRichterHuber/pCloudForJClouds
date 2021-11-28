@@ -4,10 +4,16 @@ import java.io.IOException;
 import java.io.InputStream;
 
 import org.jclouds.io.MutableContentMetadata;
+import org.jclouds.io.Payload;
 import org.jclouds.io.payloads.BasePayload;
 
 import com.pcloud.sdk.RemoteFile;
 
+/**
+ * {@link Payload} from a PCloud {@link RemoteFile}.
+ * @author Stefan Richter-Huber
+ *
+ */
 class RemoteFilePayload extends BasePayload<RemoteFile> {
 	public RemoteFilePayload(RemoteFile content) {
 		super(content);
