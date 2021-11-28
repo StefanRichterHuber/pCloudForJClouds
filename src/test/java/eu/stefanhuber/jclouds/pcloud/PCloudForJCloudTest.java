@@ -7,8 +7,10 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.apache.commons.io.IOUtils;
 import org.jclouds.ContextBuilder;
@@ -17,12 +19,13 @@ import org.jclouds.blobstore.BlobStoreContext;
 import org.jclouds.blobstore.domain.Blob;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
-import org.jclouds.blobstore.domain.StorageType;
 import org.junit.Test;
 
 import eu.stefanhuber.jclouds.pcloud.reference.PCloudConstants;
 
 public class PCloudForJCloudTest {
+
+	private static final int TIME_TO_WAIT = 250;
 
 	private static BlobStore getBlobStore() {
 		Properties properties = new Properties();
@@ -37,7 +40,7 @@ public class PCloudForJCloudTest {
 	}
 
 	@Test
-	public void shouldCreateAndDestroyContainer() {
+	public void shouldCreateAndDestroyContainer() throws InterruptedException {
 		BlobStore blobStore = getBlobStore();
 		String container = UUID.randomUUID().toString();
 
@@ -46,19 +49,19 @@ public class PCloudForJCloudTest {
 
 		// Container should be created
 		blobStore.createContainerInLocation(null, container);
-
+		Thread.sleep(TIME_TO_WAIT);
 		// Container should be existing
 		assertTrue(blobStore.containerExists(container));
 
 		// Container should be deleted
 		blobStore.deleteContainer(container);
-
+		Thread.sleep(TIME_TO_WAIT);
 		// Container should not exist in the end
 		assertFalse(blobStore.containerExists(container));
 	}
 	
 	@Test
-	public void shouldDeleteAFullContainer() {
+	public void shouldDeleteAFullContainer() throws InterruptedException {
 		BlobStore blobStore = getBlobStore();
 		String container = UUID.randomUUID().toString();
 		String b1Name = UUID.randomUUID().toString();
@@ -82,18 +85,21 @@ public class PCloudForJCloudTest {
 		blobStore.putBlob(container, b1);
 		blobStore.putBlob(container, b2);
 		blobStore.putBlob(container, b3);
+		
+		Thread.sleep(TIME_TO_WAIT);
 		
 		assertTrue(blobStore.blobExists(container, b1Name));
 		assertTrue(blobStore.blobExists(container, b2Name));
 		assertTrue(blobStore.blobExists(container, b3Name));
 		
 		blobStore.deleteContainer(container);
+		Thread.sleep(TIME_TO_WAIT);
 		assertFalse( blobStore.containerExists(container));
 		
 	}
 	
 	@Test
-	public void shouldClearAContainer() {
+	public void shouldClearAContainer() throws InterruptedException {
 		BlobStore blobStore = getBlobStore();
 		String container = UUID.randomUUID().toString();
 		String b1Name = UUID.randomUUID().toString();
@@ -117,25 +123,29 @@ public class PCloudForJCloudTest {
 		blobStore.putBlob(container, b1);
 		blobStore.putBlob(container, b2);
 		blobStore.putBlob(container, b3);
+		
+		Thread.sleep(TIME_TO_WAIT);
 		
 		assertTrue(blobStore.blobExists(container, b1Name));
 		assertTrue(blobStore.blobExists(container, b2Name));
 		assertTrue(blobStore.blobExists(container, b3Name));
 		
 		blobStore.clearContainer(container);
+		Thread.sleep(TIME_TO_WAIT);
 		assertTrue("Container should be still there", blobStore.containerExists(container));
+		
 		assertFalse(blobStore.blobExists(container, b1Name));
 		assertFalse(blobStore.blobExists(container, b2Name));
 		assertFalse(blobStore.blobExists(container, b3Name));
 		
 		// Clean up and destroy the test container
-		blobStore.deleteContainerIfEmpty(container);
-
+		blobStore.deleteContainer(container);
+		Thread.sleep(TIME_TO_WAIT);
 		assertFalse( blobStore.containerExists(container));
 	}
 
 	@Test
-	public void shouldListContainerNames() {
+	public void shouldListContainerNames() throws InterruptedException {
 		BlobStore blobStore = getBlobStore();
 		String c1 = UUID.randomUUID().toString();
 		String c2 = UUID.randomUUID().toString();
@@ -149,23 +159,19 @@ public class PCloudForJCloudTest {
 		assertTrue(blobStore.containerExists(c1));
 		assertTrue(blobStore.containerExists(c2));
 		assertTrue(blobStore.containerExists(c3));
-
+		Thread.sleep(TIME_TO_WAIT);
 		PageSet<? extends StorageMetadata> ps0 = blobStore.list();
 		assertNotNull(ps0);
-		assertTrue(ps0.size() == 3);
+		
+		List<String> names = ps0.stream().map(sm -> sm.getName()).collect(Collectors.toList());
+		assertTrue(names.contains(c1));
+		assertTrue(names.contains(c2));
+		assertTrue(names.contains(c3));
 
-		for (StorageMetadata entry : ps0) {
-			assertEquals(entry.getType(), StorageType.CONTAINER);
-			assertTrue(entry.getName().equals(c1) || entry.getName().equals(c2) || entry.getName().equals(c3));
-		}
 
 		blobStore.deleteContainer(c1);
 		blobStore.deleteContainer(c2);
 		blobStore.deleteContainer(c3);
-
-		PageSet<? extends StorageMetadata> ps1 = blobStore.list();
-		assertNotNull(ps1);
-		assertTrue(ps1.size() == 0);
 	}
 
 	@Test
