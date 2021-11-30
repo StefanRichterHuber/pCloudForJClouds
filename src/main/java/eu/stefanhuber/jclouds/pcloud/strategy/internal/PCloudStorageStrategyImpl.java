@@ -197,11 +197,12 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	@Override
 	public void clearContainer(String container, ListContainerOptions options) {
 		this.pCloudContainerNameValidator.validate(container);
-		
+
 		final boolean recursivly = options.isRecursive();
-		
+
 		try {
-			final RemoteFolder folder = this.getApiClient().listFolder(this.createPath(container), recursivly).execute();
+			final RemoteFolder folder = this.getApiClient().listFolder(this.createPath(container), recursivly)
+					.execute();
 			for (RemoteEntry child : folder.children()) {
 				child.delete();
 			}
@@ -269,12 +270,8 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 		try {
 			final RemoteFile remoteFile = this.getApiClient().loadFile(createPath(containerName, blobName)).execute();
 
-			Map<String, String> userMetadata = new HashMap<>();
-			userMetadata.put("fileId", "" + remoteFile.fileId());
-			userMetadata.put("lastModified", "" + remoteFile.lastModified());
-			userMetadata.put("created", "" + remoteFile.created());
+			final Map<String, String> userMetadata = new HashMap<>();
 			userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
-			userMetadata.put("id", remoteFile.id());
 
 			final Blob blob = this.blobBuilders.get() //
 					.payload(new RemoteFilePayload(remoteFile)) //
@@ -284,6 +281,10 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 					.name(remoteFile.name()) //
 					.userMetadata(userMetadata) //
 					.build();
+			blob.getMetadata().setLastModified(remoteFile.lastModified());
+			blob.getMetadata().setCreationDate(remoteFile.created());
+			blob.getMetadata().setId(remoteFile.id());
+			blob.getMetadata().setContainer(containerName);
 
 			return blob;
 		} catch (IOException | ApiError e) {
@@ -349,8 +350,9 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	/**
 	 * Creates a directory within a container
+	 * 
 	 * @param containerName Name of the container
-	 * @param directory directory created
+	 * @param directory     directory created
 	 */
 	public void createDirectory(String containerName, String directory) {
 		this.pCloudContainerNameValidator.validate(containerName);
@@ -364,6 +366,7 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	/**
 	 * Counts the number of blobs within a container
+	 * 
 	 * @param container
 	 * @param options
 	 * @return
@@ -378,6 +381,7 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	/**
 	 * Deletes a directory within a container
+	 * 
 	 * @param container
 	 * @param directory
 	 */
@@ -391,6 +395,7 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	/**
 	 * Checks if a directory exits within a container.
+	 * 
 	 * @param containerName
 	 * @param directory
 	 * @return
