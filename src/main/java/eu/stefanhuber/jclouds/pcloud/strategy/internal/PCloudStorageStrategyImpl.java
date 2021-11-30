@@ -34,10 +34,8 @@ import org.jclouds.logging.Logger;
 import com.google.common.base.Supplier;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
-import com.pcloud.sdk.Authenticators;
 import com.pcloud.sdk.Call;
 import com.pcloud.sdk.DataSource;
-import com.pcloud.sdk.PCloudSdk;
 import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
@@ -61,20 +59,21 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	private final ApiClient apiClient;
 
 	@Inject
-	protected PCloudStorageStrategyImpl(Provider<BlobBuilder> blobBuilders,
-			@Named(PCloudConstants.PROPERTY_BASEDIR) String baseDir,
-			@Named(PCloudConstants.PROPERTY_CLIENT_SECRET) String clientSecret,
-			PCloudContainerNameValidator pCloudContainerNameValidator, PCloudBlobKeyValidator pCloudBlobKeyValidator,
-			Supplier<Location> defaultLocation) {
+	protected PCloudStorageStrategyImpl( //
+			Provider<BlobBuilder> blobBuilders, //
+			@Named(PCloudConstants.PROPERTY_BASEDIR) String baseDir, //
+			ApiClient apiClient, //
+			PCloudContainerNameValidator pCloudContainerNameValidator,  //
+			PCloudBlobKeyValidator pCloudBlobKeyValidator, //
+			Supplier<Location> defaultLocation //
+			) {
 		this.blobBuilders = checkNotNull(blobBuilders, "PCloud storage strategy blobBuilders");
-		this.baseDirectory = checkNotNull(baseDir, "PCloud storage base directory");
+		this.baseDirectory = checkNotNull(baseDir, "Property " + PCloudConstants.PROPERTY_BASEDIR);
 		this.pCloudContainerNameValidator = checkNotNull(pCloudContainerNameValidator,
 				"PCloud container name validator");
 		this.pCloudBlobKeyValidator = checkNotNull(pCloudBlobKeyValidator, "PCloud blob key validator");
 		this.defaultLocation = defaultLocation;
-		this.apiClient = PCloudSdk.newClientBuilder()
-				.authenticator(Authenticators.newOAuthAuthenticator(checkNotNull(clientSecret, "PCloud client secret")))
-				.create();
+		this.apiClient = checkNotNull(apiClient, "PCloud api client");
 	}
 
 	/**

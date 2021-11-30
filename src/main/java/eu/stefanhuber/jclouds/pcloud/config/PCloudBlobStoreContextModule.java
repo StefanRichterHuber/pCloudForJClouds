@@ -10,7 +10,9 @@ import org.jclouds.blobstore.config.LocalBlobStore;
 import org.jclouds.blobstore.util.BlobUtils;
 
 import com.google.inject.AbstractModule;
+import com.pcloud.sdk.ApiClient;
 
+import eu.stefanhuber.jclouds.pcloud.connection.PCloudApiClientProvider;
 import eu.stefanhuber.jclouds.pcloud.predicates.validators.PCloudBlobKeyValidator;
 import eu.stefanhuber.jclouds.pcloud.predicates.validators.PCloudContainerNameValidator;
 import eu.stefanhuber.jclouds.pcloud.predicates.validators.internal.PCloudBlobKeyValidatorImpl;
@@ -25,6 +27,7 @@ public class PCloudBlobStoreContextModule extends AbstractModule {
 		bind(BlobStore.class).to(LocalBlobStore.class);
 		install(new BlobStoreObjectModule());
 		bind(ConsistencyModel.class).toInstance(ConsistencyModel.STRICT);
+		bind(ApiClient.class).toProvider(PCloudApiClientProvider.class);
 		bind(LocalStorageStrategy.class).to(PCloudStorageStrategyImpl.class);
 		bind(BlobUtils.class).to(PCloudBlobUtilsImpl.class);
 		bind(PCloudBlobKeyValidator.class).to(PCloudBlobKeyValidatorImpl.class);
