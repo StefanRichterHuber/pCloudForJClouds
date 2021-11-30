@@ -39,6 +39,7 @@ import com.pcloud.sdk.PCloudSdk;
 import com.pcloud.sdk.RemoteFile;
 
 import eu.stefanhuber.jclouds.pcloud.reference.PCloudConstants;
+import eu.stefanhuber.jclouds.pcloud.s3proxy.DynamicPCloudBlobStoreLocator;
 
 public class Benchmark {
 	private static final int contentSize = 100;
@@ -204,9 +205,6 @@ public class Benchmark {
 
 	@Test
 	public void s3ViaPCloud() throws Exception {
-		Properties properties = new Properties();
-		properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
-		properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, System.getenv("PCLOUD_TOKEN"));
 
 		/**
 		 * AWS client expects MD5 hash while pcloud delivers sha hashes, so disable MD5
@@ -214,24 +212,23 @@ public class Benchmark {
 		 */
 		System.setProperty("com.amazonaws.services.s3.disablePutObjectMD5Validation", "true");
 		System.setProperty("com.amazonaws.services.s3.disableGetObjectMD5Validation", "true");
-		System.setProperty("org.eclipse.jetty.LEVEL", "ERROR");
-
-		BlobStoreContext context = ContextBuilder.newBuilder("pcloud").overrides(properties)
-				.build(BlobStoreContext.class);
 
 		S3Proxy s3Proxy = S3Proxy.builder() //
-				.blobStore(context.getBlobStore()) //
 				.endpoint(URI.create("http://127.0.0.1:8080")) //
 				.awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "access", "secret") //
 				.build();
 
+		Properties properties = new Properties();
+		properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
+		
+		s3Proxy.setBlobStoreLocator(new DynamicPCloudBlobStoreLocator(properties));
 		s3Proxy.start();
 		while (!s3Proxy.getState().equals(AbstractLifeCycle.STARTED)) {
 			Thread.sleep(1);
 		}
 
 		AmazonS3 s3Client = AmazonS3ClientBuilder.standard()
-				.withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("access", "secret")))
+				.withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials(System.getenv("PCLOUD_TOKEN"), System.getenv("PCLOUD_TOKEN"))))
 				.withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080",
 						Regions.US_EAST_1.getName()))
 				.build();
