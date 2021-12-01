@@ -73,32 +73,42 @@
 				</configuration>
 			</plugin>
 
+			<!-- Not possible to simply use maven assembly plugin to generate fat 
+				executable jar, because the SPI definitions for org.jclouds.apis.ApiMetadata 
+				for the pcloud extension are overwritten by the one from the jars copied 
+				into this project. Therefore copy all dependencies into a libs folder and 
+				use the maven-jar-plugin the fetch these. -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-assembly-plugin</artifactId>
-				<version>3.1.1</version>
-
+				<artifactId>maven-dependency-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>copy-dependencies</id>
+						<phase>prepare-package</phase>
+						<goals>
+							<goal>copy-dependencies</goal>
+						</goals>
+						<configuration>
+							<outputDirectory>
+								${project.build.directory}/libs
+							</outputDirectory>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>3.1.0</version>
 				<configuration>
-					<descriptorRefs>
-						<descriptorRef>jar-with-dependencies</descriptorRef>
-					</descriptorRefs>
 					<archive>
 						<manifest>
+							<addClasspath>true</addClasspath>
+							<classpathPrefix>libs/</classpathPrefix>
 							<mainClass>eu.stefanhuber.s3proxy.Main</mainClass>
 						</manifest>
 					</archive>
 				</configuration>
-
-				<executions>
-					<execution>
-						<id>make-assembly</id>
-						<phase>package</phase>
-						<goals>
-							<goal>single</goal>
-						</goals>
-					</execution>
-				</executions>
-
 			</plugin>
 		</plugins>
 	</build>

@@ -39,7 +39,7 @@ import com.pcloud.sdk.PCloudSdk;
 import com.pcloud.sdk.RemoteFile;
 
 import eu.stefanhuber.jclouds.pcloud.reference.PCloudConstants;
-import eu.stefanhuber.jclouds.pcloud.s3proxy.DynamicPCloudBlobStoreLocator;
+import eu.stefanhuber.s3proxy.DynamicPCloudBlobStoreLocator;
 
 public class Benchmark {
 	private static final int contentSize = 100;
