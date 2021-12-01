@@ -1,4 +1,4 @@
-package eu.stefanhuber.jclouds.pcloud.s3proxy;
+package eu.stefanhuber.s3proxy;
 
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
