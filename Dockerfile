@@ -3,7 +3,7 @@ FROM adoptopenjdk/openjdk8
 RUN mkdir /opt/app && mkdir /opt/app/libs
 
 # Copy all dependencies from the libs folder
-COPY target/libs/*.jar /opt/app/libs
+COPY target/libs/*.jar /opt/app/libs/
 # Copy the executable jar
 COPY target/pcloud-s3proxy*.jar /opt/app/pcloud-s3proxy.jar
 

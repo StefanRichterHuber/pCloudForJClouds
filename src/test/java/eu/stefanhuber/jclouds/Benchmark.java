@@ -228,6 +228,7 @@ public class Benchmark {
 		}
 
 		AmazonS3 s3Client = AmazonS3ClientBuilder.standard()
+				.withPathStyleAccessEnabled(true)
 				.withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials(System.getenv("PCLOUD_TOKEN"), System.getenv("PCLOUD_TOKEN"))))
 				.withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080",
 						Regions.US_EAST_1.getName()))

@@ -3,6 +3,7 @@ package eu.stefanhuber.jclouds.pcloud;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
@@ -25,7 +26,7 @@ import eu.stefanhuber.jclouds.pcloud.reference.PCloudConstants;
 
 public class PCloudForJCloudTest {
 
-	private static final int TIME_TO_WAIT = 250;
+	private static final int TIME_TO_WAIT = 500;
 
 	private static BlobStore getBlobStore() {
 		Properties properties = new Properties();
@@ -61,43 +62,100 @@ public class PCloudForJCloudTest {
 	}
 	
 	@Test
+	public void shouldCreateFoldersForBlob() throws InterruptedException {
+		BlobStore blobStore = getBlobStore();
+		String container = UUID.randomUUID().toString();
+		String blobName = "f1/f2/f3/f4/" + UUID.randomUUID().toString() + ".txt";
+		String blobContent = UUID.randomUUID().toString();
+
+		
+		blobStore.createContainerInLocation(null, container);
+		Thread.sleep(TIME_TO_WAIT);
+		assertTrue(blobStore.containerExists(container));
+		
+		Blob contentBlob = blobStore
+				.blobBuilder(blobName) //
+				.payload(blobContent) //
+				.build();
+		blobStore.putBlob(container, contentBlob);
+		Thread.sleep(TIME_TO_WAIT);
+		blobStore.blobExists(container, blobName);
+		
+		blobStore.deleteContainer(container);
+	}
+
+	@Test
 	public void shouldDeleteAFullContainer() throws InterruptedException {
 		BlobStore blobStore = getBlobStore();
 		String container = UUID.randomUUID().toString();
 		String b1Name = UUID.randomUUID().toString();
 		String b2Name = UUID.randomUUID().toString();
 		String b3Name = UUID.randomUUID().toString();
-		
+
 		blobStore.createContainerInLocation(null, container);
 
 		assertTrue(blobStore.containerExists(container));
-		
+
 		Blob b1 = blobStore.blobBuilder(b1Name)//
-				.payload(b1Name)
-				.build();
+				.payload(b1Name).build();
 		Blob b2 = blobStore.blobBuilder(b2Name)//
-				.payload(b2Name)
-				.build();
+				.payload(b2Name).build();
 		Blob b3 = blobStore.blobBuilder(b3Name)//
-				.payload(b3Name)
-				.build();
-		
+				.payload(b3Name).build();
+
 		blobStore.putBlob(container, b1);
 		blobStore.putBlob(container, b2);
 		blobStore.putBlob(container, b3);
-		
+
 		Thread.sleep(TIME_TO_WAIT);
-		
+
 		assertTrue(blobStore.blobExists(container, b1Name));
 		assertTrue(blobStore.blobExists(container, b2Name));
 		assertTrue(blobStore.blobExists(container, b3Name));
-		
+
 		blobStore.deleteContainer(container);
 		Thread.sleep(TIME_TO_WAIT);
-		assertFalse( blobStore.containerExists(container));
-		
+		assertFalse(blobStore.containerExists(container));
+
 	}
-	
+
+	@Test
+	public void shouldCreateDirectoryInContainer() throws InterruptedException {
+		BlobStore blobStore = getBlobStore();
+		String container = UUID.randomUUID().toString();
+		String folder = UUID.randomUUID().toString() + "/";
+		String blobName = UUID.randomUUID().toString() + ".txt";
+		String blobContent = UUID.randomUUID().toString();
+
+		// Create test container
+		blobStore.createContainerInLocation(null, container);
+		assertTrue(blobStore.containerExists(container));
+
+		// Create test folder
+		Blob folderBlob = blobStore //
+				.blobBuilder(folder) //
+				.build();
+		blobStore.putBlob(container, folderBlob);
+		Thread.sleep(TIME_TO_WAIT);
+		// Check if test folder is present
+		assertTrue(blobStore.blobExists(container, folder));
+
+		// Insert file into test folder
+		Blob contentBlob = blobStore
+				.blobBuilder(folder + blobName) //
+				.payload(blobContent) //
+				.build();
+		
+		blobStore.putBlob(container, contentBlob);
+		Thread.sleep(TIME_TO_WAIT);
+		// Check if test content is present
+		assertTrue(blobStore.blobExists(container, folder + blobName));
+		
+		// Cleanup
+		blobStore.deleteContainer(container);
+
+	}
+
 	@Test
 	public void shouldClearAContainer() throws InterruptedException {
 		BlobStore blobStore = getBlobStore();
@@ -105,43 +163,40 @@ public class PCloudForJCloudTest {
 		String b1Name = UUID.randomUUID().toString();
 		String b2Name = UUID.randomUUID().toString();
 		String b3Name = UUID.randomUUID().toString();
-		
+
 		blobStore.createContainerInLocation(null, container);
 
 		assertTrue(blobStore.containerExists(container));
-		
+
 		Blob b1 = blobStore.blobBuilder(b1Name)//
-				.payload(b1Name)
-				.build();
+				.payload(b1Name).build();
 		Blob b2 = blobStore.blobBuilder(b2Name)//
-				.payload(b2Name)
-				.build();
+				.payload(b2Name).build();
 		Blob b3 = blobStore.blobBuilder(b3Name)//
-				.payload(b3Name)
-				.build();
-		
+				.payload(b3Name).build();
+
 		blobStore.putBlob(container, b1);
 		blobStore.putBlob(container, b2);
 		blobStore.putBlob(container, b3);
-		
+
 		Thread.sleep(TIME_TO_WAIT);
-		
+
 		assertTrue(blobStore.blobExists(container, b1Name));
 		assertTrue(blobStore.blobExists(container, b2Name));
 		assertTrue(blobStore.blobExists(container, b3Name));
-		
+
 		blobStore.clearContainer(container);
 		Thread.sleep(TIME_TO_WAIT);
 		assertTrue("Container should be still there", blobStore.containerExists(container));
-		
+
 		assertFalse(blobStore.blobExists(container, b1Name));
 		assertFalse(blobStore.blobExists(container, b2Name));
 		assertFalse(blobStore.blobExists(container, b3Name));
-		
+
 		// Clean up and destroy the test container
 		blobStore.deleteContainer(container);
 		Thread.sleep(TIME_TO_WAIT);
-		assertFalse( blobStore.containerExists(container));
+		assertFalse(blobStore.containerExists(container));
 	}
 
 	@Test
@@ -162,12 +217,11 @@ public class PCloudForJCloudTest {
 		Thread.sleep(TIME_TO_WAIT);
 		PageSet<? extends StorageMetadata> ps0 = blobStore.list();
 		assertNotNull(ps0);
-		
+
 		List<String> names = ps0.stream().map(sm -> sm.getName()).collect(Collectors.toList());
 		assertTrue(names.contains(c1));
 		assertTrue(names.contains(c2));
 		assertTrue(names.contains(c3));
-
 
 		blobStore.deleteContainer(c1);
 		blobStore.deleteContainer(c2);
@@ -175,7 +229,7 @@ public class PCloudForJCloudTest {
 	}
 
 	@Test
-	public void shouldUploadAndDownloadContent() throws IOException {
+	public void shouldUploadAndDownloadContent() throws IOException, InterruptedException {
 		BlobStore blobStore = getBlobStore();
 		String container = UUID.randomUUID().toString();
 		String blobName = UUID.randomUUID().toString() + ".txt";
@@ -195,6 +249,7 @@ public class PCloudForJCloudTest {
 
 		String etag = blobStore.putBlob(container, blob);
 		assertNotNull("Should have an etag", etag);
+		Thread.sleep(TIME_TO_WAIT);
 
 		// Blob should exist
 		assertTrue(blobStore.blobExists(container, blobName));
@@ -207,6 +262,11 @@ public class PCloudForJCloudTest {
 
 		// Delete blob
 		blobStore.removeBlob(container, blobName);
+		Thread.sleep(TIME_TO_WAIT);
+
+		// Blob should be deleted
+		assertFalse(blobStore.blobExists(container, blobName));
+		assertNull(blobStore.getBlob(container, blobName));
 
 	}
 

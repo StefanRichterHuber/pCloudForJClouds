@@ -1,6 +1,7 @@
 package eu.stefanhuber.jclouds.pcloud.strategy.internal;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.io.BaseEncoding.base16;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -28,10 +29,12 @@ import org.jclouds.blobstore.domain.StorageType;
 import org.jclouds.blobstore.domain.internal.MutableStorageMetadataImpl;
 import org.jclouds.blobstore.options.CreateContainerOptions;
 import org.jclouds.blobstore.options.ListContainerOptions;
+import org.jclouds.blobstore.reference.BlobStoreConstants;
 import org.jclouds.domain.Location;
 import org.jclouds.logging.Logger;
 
 import com.google.common.base.Supplier;
+import com.google.common.hash.Hashing;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
 import com.pcloud.sdk.Call;
@@ -57,16 +60,17 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	protected final PCloudBlobKeyValidator pCloudBlobKeyValidator;
 	private final Supplier<Location> defaultLocation;
 	private final ApiClient apiClient;
+	private static final byte[] DIRECTORY_MD5 = Hashing.md5().hashBytes(new byte[0]).asBytes();
 
 	@Inject
 	protected PCloudStorageStrategyImpl( //
 			Provider<BlobBuilder> blobBuilders, //
 			@Named(PCloudConstants.PROPERTY_BASEDIR) String baseDir, //
 			ApiClient apiClient, //
-			PCloudContainerNameValidator pCloudContainerNameValidator,  //
+			PCloudContainerNameValidator pCloudContainerNameValidator, //
 			PCloudBlobKeyValidator pCloudBlobKeyValidator, //
 			Supplier<Location> defaultLocation //
-			) {
+	) {
 		this.blobBuilders = checkNotNull(blobBuilders, "PCloud storage strategy blobBuilders");
 		this.baseDirectory = checkNotNull(baseDir, "Property " + PCloudConstants.PROPERTY_BASEDIR);
 		this.pCloudContainerNameValidator = checkNotNull(pCloudContainerNameValidator,
@@ -120,10 +124,15 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 			final String path = createPath(container);
 			RemoteFolder remoteFolder = this.getApiClient().listFolder(path).execute();
 			return remoteFolder.isFolder();
-		} catch (IOException | ApiError e) {
-			if (e instanceof ApiError && PCloudError.parse((ApiError) e) == PCloudError.DIRECTORY_DOES_NOT_EXIST) {
+		} catch (ApiError e) {
+			final PCloudError pCloudError = PCloudError.parse(e);
+			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
+					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+				logger.debug("Container {} not found: {}", container, pCloudError.getCode());
 				return false;
 			}
+			throw new PCloudBlobStoreException(e);
+		} catch (IOException e) {
 			throw new PCloudBlobStoreException(e);
 		}
 	}
@@ -165,14 +174,14 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	@Override
 	public ContainerAccess getContainerAccess(String container) {
 		this.pCloudContainerNameValidator.validate(container);
-		this.logger.warn("Retrieving access rights for PCloud containers not supported: %s", container);
+		this.logger.debug("Retrieving access rights for PCloud containers not supported: %s", container);
 		return ContainerAccess.PRIVATE;
 	}
 
 	@Override
 	public void setContainerAccess(String container, ContainerAccess access) {
 		this.pCloudContainerNameValidator.validate(container);
-		this.logger.warn("Settings access rights for PCloud containers not supported: %s", container);
+		this.logger.debug("Settings access rights for PCloud containers not supported: %s", container);
 	}
 
 	@Override
@@ -226,30 +235,86 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 			metadata.setId(remoteFolder.id());
 
 			return metadata;
-		} catch (IOException | ApiError e) {
-			if (e instanceof ApiError && PCloudError.parse((ApiError) e) == PCloudError.DIRECTORY_DOES_NOT_EXIST) {
+		} catch (ApiError e) {
+			final PCloudError pCloudError = PCloudError.parse(e);
+			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
+					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+				logger.debug("Container {} not found: {}", container, pCloudError.getCode());
 				return null;
 			}
 			throw new PCloudBlobStoreException(e);
+		} catch (IOException e) {
+			throw new PCloudBlobStoreException(e);
 		}
-
 	}
 
 	@Override
 	public boolean blobExists(String container, String key) {
 		this.pCloudContainerNameValidator.validate(container);
 		this.pCloudBlobKeyValidator.validate(key);
+
+		final String name = getFileOfKey(key);
+
+		final String rootDir = getFolderOfKey(container, key);
+
 		try {
-			RemoteFolder remoteFolder = this.getApiClient().listFolder(this.createPath(container)).execute();
-			Optional<RemoteEntry> blob = remoteFolder.children().stream().filter(RemoteEntry::isFile)
-					.filter(re -> re.name().equals(key)).findFirst();
+			final RemoteFolder remoteFolder = this.getApiClient().listFolder(this.createPath(rootDir)).execute();
+			final Optional<RemoteEntry> blob = remoteFolder.children().stream().filter(re -> re.name().equals(name))
+					.findFirst();
 			return blob.isPresent();
-		} catch (IOException | ApiError e) {
-			if (e instanceof ApiError && PCloudError.parse((ApiError) e) == PCloudError.DIRECTORY_DOES_NOT_EXIST) {
+		} catch (ApiError e) {
+			final PCloudError pCloudError = PCloudError.parse(e);
+			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
+					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+				logger.debug("Blob {}/{} not found: {}", container, key, pCloudError.getCode());
 				return false;
 			}
 			throw new PCloudBlobStoreException(e);
+		} catch (IOException e) {
+			throw new PCloudBlobStoreException(e);
 		}
+	}
+
+	/**
+	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
+	 * k
+	 * 
+	 * @param key
+	 * @return
+	 * @return
+	 */
+	private static String getFileOfKey(String key) {
+
+		/*
+		 * First strip directory suffix
+		 */
+		String name = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
+		name = name.replace("\\", SEPARATOR);
+
+		/*
+		 * Then fetch name
+		 */
+		if (name.contains(SEPARATOR)) {
+			return name.substring(name.lastIndexOf(SEPARATOR) + 1);
+		}
+		return name;
+	}
+
+	/**
+	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
+	 * f1/f2/f3
+	 * 
+	 * @param key
+	 * @return
+	 */
+	private static String getFolderOfKey(String container, String key) {
+		String folder = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
+		folder = folder.replace("\\", SEPARATOR);
+		if (folder.contains(SEPARATOR)) {
+			folder = key.substring(0, key.lastIndexOf(SEPARATOR));
+			return container + SEPARATOR + folder;
+		}
+		return container;
 	}
 
 	@Override
@@ -286,22 +351,122 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 			blob.getMetadata().setContainer(containerName);
 
 			return blob;
-		} catch (IOException | ApiError e) {
+		} catch (ApiError e) {
+			final PCloudError pCloudError = PCloudError.parse(e);
+			if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+				logger.debug("Blob {}/{} not found: {}", containerName, blobName, pCloudError.getCode());
+				return null;
+			}
+			if (pCloudError == PCloudError.PARENT_DIR_DOES_NOT_EXISTS) {
+				logger.warn("Parent folder of blob {}/{} does not exist", containerName, blobName);
+				return null;
+			}
+			throw new PCloudBlobStoreException(e);
+		} catch (IOException e) {
 			throw new PCloudBlobStoreException(e);
 		}
+	}
+
+	/**
+	 * Utility method to check if the blob key is actually a directory name
+	 * 
+	 * @param key Blob key
+	 * @return
+	 */
+	private static String getDirectoryBlobSuffix(String key) {
+		for (String suffix : BlobStoreConstants.DIRECTORY_SUFFIXES) {
+			if (key.endsWith(suffix)) {
+				return suffix;
+			}
+		}
+		return null;
 	}
 
 	@Override
 	public String putBlob(String containerName, Blob blob) throws IOException {
 		this.pCloudContainerNameValidator.validate(containerName);
+		this.pCloudBlobKeyValidator.validate(blob.getMetadata().getName());
+
+		if (getDirectoryBlobSuffix(blob.getMetadata().getName()) != null) {
+			return putDirectoryBlob(containerName, blob);
+		}
+
+		final String name = getFileOfKey(blob.getMetadata().getName());
+
+		final String rootDir = getFolderOfKey(containerName, blob.getMetadata().getName());
+
 		try {
-			final String name = blob.getMetadata().getName();
-			final String path = createPath(containerName);
+			// Check if parent folder exists
+			checkAndCreateParentFolder(rootDir);
+
+			final String path = createPath(rootDir);
 			final DataSource ds = dataSourceFromBlob(blob);
 			final Call<RemoteFile> createdFile = this.getApiClient().createFile(path, name, ds,
 					UploadOptions.OVERRIDE_FILE);
 			RemoteFile remoteFile = createdFile.execute();
 			return remoteFile.hash();
+		} catch (IOException | ApiError e) {
+			throw new PCloudBlobStoreException(e);
+		}
+	}
+
+	/**
+	 * Checks if all directory parts exists, and create them if necessary
+	 * 
+	 * @param rootDir
+	 * @throws ApiError
+	 * @throws IOException
+	 */
+	private void checkAndCreateParentFolder(String rootDir) throws IOException, ApiError {
+		final String[] parts = rootDir.split(SEPARATOR);
+		/*
+		 * Recursively check folder structure starting with base directory
+		 */
+		RemoteFolder remoteFolder = this.getApiClient().listFolder(this.createPath(), true).execute();
+		for (int i = 0; i < parts.length; i++) {
+			final int idx = i;
+			final String subFolder = parts[idx];
+
+			RemoteFolder nxt = remoteFolder.children().stream()
+					.filter(re -> re.isFolder() && re.name().equals(subFolder)).findFirst().map(re -> re.asFolder())
+					.orElse(null);
+			if (nxt == null) {
+				// Remote folder not found -> create it and all necessary children
+				nxt = this.getApiClient().createFolder(remoteFolder.folderId(), subFolder).execute();
+			}
+			remoteFolder = nxt;
+		}
+
+	}
+
+	/**
+	 * Strips the the directory suffix from a directory name
+	 * 
+	 * @param key Blob key
+	 * @return
+	 */
+	private static String stripDirectorySuffix(String key) {
+		String suffix = getDirectoryBlobSuffix(key);
+		if (suffix != null) {
+			return key.substring(0, key.lastIndexOf(suffix));
+		}
+		return key;
+	}
+
+	/**
+	 * Creates a directory blob (simply a new folder within the container)
+	 * 
+	 * @param conainerName Name of the container
+	 * @param blob         Directory blob
+	 * @return Etag of the blob (always null!)
+	 * @throws IOException
+	 */
+	private String putDirectoryBlob(String containerName, Blob blob) throws IOException {
+		final String blobName = blob.getMetadata().getName();
+		final String directory = stripDirectorySuffix(blobName);
+		try {
+			this.getApiClient().createFolder(this.createPath(containerName, directory)).execute();
+			return base16().lowerCase().encode(DIRECTORY_MD5);
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}
@@ -326,14 +491,14 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	@Override
 	public BlobAccess getBlobAccess(String container, String key) {
-		this.logger.warn("Retrieving access rights for PCloud blobs not supported: %s%s%s", container, getSeparator(),
+		this.logger.debug("Retrieving access rights for PCloud blobs not supported: %s%s%s", container, getSeparator(),
 				key);
 		return BlobAccess.PRIVATE;
 	}
 
 	@Override
 	public void setBlobAccess(String container, String key, BlobAccess access) {
-		this.logger.warn("Setting access rights for PCloud blobs not supported: %s%s%s", container, getSeparator(),
+		this.logger.debug("Setting access rights for PCloud blobs not supported: %s%s%s", container, getSeparator(),
 				key);
 	}
 

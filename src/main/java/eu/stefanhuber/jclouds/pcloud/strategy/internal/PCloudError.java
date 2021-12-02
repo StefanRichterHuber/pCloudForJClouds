@@ -23,6 +23,7 @@ enum PCloudError {
 	USER_OVER_QUOTA(2008), // User is over quota.
 	FILE_NOT_FOUND(2009), // File not found.
 	INVALID_PATH(2010), // Invalid path.
+	FILE_OR_FOLDER_NOT_FOUND(2055), // File or folder not found
 	TO_MANY_LOGIN_ATTEMPTS(4000), // Too many login tries from this IP address.
 	INTERNAL_ERROR(5000), // Internal error. Try again later.
 	INTERNAL_UPLOAD_ERROR(5001), // Internal upload error.
@@ -32,6 +33,10 @@ enum PCloudError {
 
 	private PCloudError(int code) {
 		this.code = code;
+	}
+	
+	public int getCode() {
+		return this.code;
 	}
 
 	/**

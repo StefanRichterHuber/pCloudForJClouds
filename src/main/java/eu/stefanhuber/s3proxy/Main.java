@@ -79,7 +79,7 @@ public class Main implements Callable<Integer> {
 			System.out.println("Stopped s3 proxy");
 		}));
 
-		System.out.println("Startet s3 proxy at " + endpoint);
+		System.out.println("Started s3 proxy at " + endpoint);
 
 		while (true) {
 			Thread.sleep(10000);
