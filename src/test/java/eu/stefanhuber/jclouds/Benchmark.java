@@ -1,5 +1,7 @@
 package eu.stefanhuber.jclouds;
 
+import static org.junit.Assert.assertNotNull;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -112,6 +114,9 @@ public class Benchmark {
 		s3Client.putObject(
 				new PutObjectRequest(container, blobName, new ByteArrayInputStream(blobContent), objectMetadata));
 
+		ObjectMetadata metadata = s3Client.getObjectMetadata(container, blobName);
+		assertNotNull(metadata);
+		
 		S3Object s3Object = s3Client.getObject(new GetObjectRequest(container, blobName));
 		try (InputStream inputStream = s3Object.getObjectContent()) {
 			byte[] resultArray = IOUtils.toByteArray(inputStream);

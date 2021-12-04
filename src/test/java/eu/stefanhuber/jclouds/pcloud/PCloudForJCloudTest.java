@@ -256,7 +256,7 @@ public class PCloudForJCloudTest {
 		assertTrue(blobStore.blobExists(container, blobName));
 
 		// Download content
-		Blob result = blobStore.getBlob(container, blobName, null);
+		Blob result = blobStore.getBlob(container, blobName, GetOptions.NONE);
 		assertNotNull(result);
 		String resultContent = IOUtils.toString(result.getPayload().openStream(), StandardCharsets.UTF_8.name());
 		assertEquals("Content should be equal", blobContent, resultContent);
