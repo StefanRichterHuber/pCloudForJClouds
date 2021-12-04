@@ -20,6 +20,7 @@ import org.jclouds.blobstore.BlobStoreContext;
 import org.jclouds.blobstore.domain.Blob;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
+import org.jclouds.blobstore.options.GetOptions;
 import org.junit.Test;
 
 import eu.stefanhuber.jclouds.pcloud.reference.PCloudConstants;
@@ -269,5 +270,5 @@ public class PCloudForJCloudTest {
 		assertNull(blobStore.getBlob(container, blobName));
 
 	}
-
+	
 }

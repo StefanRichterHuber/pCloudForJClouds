@@ -31,6 +31,7 @@ import org.jclouds.blobstore.options.CreateContainerOptions;
 import org.jclouds.blobstore.options.ListContainerOptions;
 import org.jclouds.blobstore.reference.BlobStoreConstants;
 import org.jclouds.domain.Location;
+import org.jclouds.io.Payload;
 import org.jclouds.logging.Logger;
 
 import com.google.common.base.Supplier;
@@ -60,7 +61,10 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	protected final PCloudBlobKeyValidator pCloudBlobKeyValidator;
 	private final Supplier<Location> defaultLocation;
 	private final ApiClient apiClient;
-	private static final byte[] DIRECTORY_MD5 = Hashing.md5().hashBytes(new byte[0]).asBytes();
+
+	private static final byte[] EMPTY_CONTENT = new byte[0];
+
+	private static final byte[] DIRECTORY_MD5 = Hashing.md5().hashBytes(EMPTY_CONTENT).asBytes();
 
 	@Inject
 	protected PCloudStorageStrategyImpl( //
@@ -337,8 +341,9 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 			final Map<String, String> userMetadata = new HashMap<>();
 			userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
 
+			final Payload payload = remoteFile.size() == 0 ? new EmptyPayload() : new RemoteFilePayload(remoteFile);
 			final Blob blob = this.blobBuilders.get() //
-					.payload(new RemoteFilePayload(remoteFile)) //
+					.payload(payload) //
 					.contentType(remoteFile.contentType()) //
 					.contentLength(remoteFile.size()) //
 					.eTag(remoteFile.hash()) //
