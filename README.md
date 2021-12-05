@@ -3,9 +3,9 @@
 ## Motivation
 
 I am a owner of both a QNAP® NAS and a pCloud® lifetime account. So it was obvious to use pCloud as backup target for QNAP Hybrid Sync Backup®.
-pCloud is not directly supported as backup target so only WebDav was possible.
-Unfortunately the pCloud WebDav was both unreliable and slow compared to its native SDK so daily backups with only a few changes took half a day. 
-Another interessting target of QNAP Hybrid Sync Backup are S3 compatible clouds, so I searched for possible solutions and found [S3Proxy](https://github.com/gaul/s3proxy). 
+Since pCloud is not directly supported as backup target I tried WebDav. 
+Unfortunately the pCloud WebDav implementation is both unreliable and slow compared to its native SDK so daily backups with only a few changes took half a day. 
+But fortunately QNAP Hybrid Sync Backup also supports S3 compatible clouds, so I searched for possible solutions and found [S3Proxy](https://github.com/gaul/s3proxy), which acts as S3-compatible gateway for various storage backends.
 Since [S3Proxy](https://github.com/gaul/s3proxy) uses [Apache jClouds](https://jclouds.apache.org/) as backend, I developed a custom BlobStore for [Apache jClouds](https://jclouds.apache.org/) using the Java Api from [pCloud Java SDK](https://github.com/pCloud/pcloud-sdk-java).
 
 ## Content 
@@ -16,33 +16,30 @@ A pCloud oauth token can be generated using the [pCloud web api](https://docs.pc
 ## Example 
 
 ```java
-	  S3Proxy s3Proxy = S3Proxy.builder() //
-				.endpoint(URI.create("http://127.0.0.1:8080")) //
-				.awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "dummy", "dummy") // Authentication here is ignored
-				.build();
+     S3Proxy s3Proxy = S3Proxy.builder() //
+          .endpoint(URI.create("http://127.0.0.1:8080")) //
+          .awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "dummy", "dummy") // Authentication here is ignored
+          .build();
 
-		Properties properties = new Properties();
-		properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3"); // Base directory within the pCloud account containing all containers
+     Properties properties = new Properties();
+     properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3"); // Base directory within the pCloud account containing all containers. Should exist
 		
-		s3Proxy.setBlobStoreLocator(new DynamicPCloudBlobStoreLocator(properties));
-		s3Proxy.start();
-		while (!s3Proxy.getState().equals(AbstractLifeCycle.STARTED)) {
-			Thread.sleep(1);
-		}
+     s3Proxy.setBlobStoreLocator(new DynamicPCloudBlobStoreLocator(properties)); // Enables dynamic authentication of pCloud
+     s3Proxy.start();
+     while (!s3Proxy.getState().equals(AbstractLifeCycle.STARTED)) {
+          Thread.sleep(1);
+     }
 
-    /*
-     * AWS client expects MD5 hash while pcloud delivers sha hashes, so disable MD5
-     * validation
-     */
+     // AWS client expects MD5 hash while pcloud delivers sha hashes, so disable MD5 validation
      System.setProperty("com.amazonaws.services.s3.disablePutObjectMD5Validation", "true");
      System.setProperty("com.amazonaws.services.s3.disableGetObjectMD5Validation", "true");
  
      AmazonS3 s3Client = AmazonS3ClientBuilder.standard()
-				.withPathStyleAccessEnabled(true) // S3Proxy supports virtual host style, but its far easier to setup a path style access to the containers
-				.withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials([pcloudToken], [pcloudToken]))) // Add pcloud token 
-				.withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080", // URL of the S3 Proxy
-						Regions.US_EAST_1.getName()))
-				.build();
+          .withPathStyleAccessEnabled(true) // S3Proxy supports virtual host style, but its far easier to simply use path style access
+          .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials([pcloudToken], [pcloudToken]))) // Add pcloud token 
+          .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080", // URL of the S3 Proxy
+               Regions.US_EAST_1.getName()))
+          .build();
  ```
 
 ## Deployment
