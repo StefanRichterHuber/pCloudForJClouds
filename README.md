@@ -1,3 +1,5 @@
+![Build](https://github.com/StefanRichterHuber/pCloudForJClouds/actions/workflows/maven.yml/badge.svg)
+
 # Apache JClouds BlobStore implementation to access pCloud
 
 ## Motivation
