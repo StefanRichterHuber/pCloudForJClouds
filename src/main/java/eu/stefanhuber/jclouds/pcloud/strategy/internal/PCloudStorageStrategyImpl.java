@@ -10,6 +10,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 import javax.annotation.Resource;
@@ -55,10 +57,10 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	private static final String SEPARATOR = "/";
 
-	protected final Provider<BlobBuilder> blobBuilders;
-	protected final String baseDirectory;
-	protected final PCloudContainerNameValidator pCloudContainerNameValidator;
-	protected final PCloudBlobKeyValidator pCloudBlobKeyValidator;
+	private final Provider<BlobBuilder> blobBuilders;
+	private final String baseDirectory;
+	private final PCloudContainerNameValidator pCloudContainerNameValidator;
+	private final PCloudBlobKeyValidator pCloudBlobKeyValidator;
 	private final Supplier<Location> defaultLocation;
 	private final ApiClient apiClient;
 
@@ -121,12 +123,147 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 		return DataSource.create(content);
 	}
 
+	/**
+	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
+	 * k
+	 * 
+	 * @param key
+	 * @return
+	 * @return
+	 */
+	private static String getFileOfKey(String key) {
+
+		/*
+		 * First strip directory suffix
+		 */
+		String name = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
+		name = name.replace("\\", SEPARATOR);
+
+		/*
+		 * Then fetch name
+		 */
+		if (name.contains(SEPARATOR)) {
+			return name.substring(name.lastIndexOf(SEPARATOR) + 1);
+		}
+		return name;
+	}
+
+	/**
+	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
+	 * f1/f2/f3
+	 * 
+	 * @param key
+	 * @return
+	 */
+	private static String getFolderOfKey(String container, String key) {
+		String folder = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
+		folder = folder.replace("\\", SEPARATOR);
+		if (folder.contains(SEPARATOR)) {
+			folder = key.substring(0, key.lastIndexOf(SEPARATOR));
+			return container + SEPARATOR + folder;
+		}
+		return container;
+	}
+
+	private SortedSet<String> getBlobKeysInsideContainer(RemoteFolder remoteFolder, String prefix) throws IOException {
+		final SortedSet<String> result = new TreeSet<>();
+		for (RemoteEntry entry : remoteFolder.children()) {
+			if (entry.isFile()) {
+				if (prefix != null && entry.asFile().name().startsWith(prefix)) {
+					result.add(entry.asFile().name());
+				} else {
+					result.add(entry.asFile().name());
+				}
+			} else if (entry.isFolder()) {
+				result.addAll(this.getBlobKeysInsideContainer(entry.asFolder(), prefix));
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * Utility method to check if the blob key is actually a directory name
+	 * 
+	 * @param key Blob key
+	 * @return
+	 */
+	private static String getDirectoryBlobSuffix(String key) {
+		for (String suffix : BlobStoreConstants.DIRECTORY_SUFFIXES) {
+			if (key.endsWith(suffix)) {
+				return suffix;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Checks if all directory parts exists, and create them if necessary
+	 * 
+	 * @param rootDir
+	 * @throws ApiError
+	 * @throws IOException
+	 */
+	private RemoteFolder checkAndCreateParentFolder(String rootDir) throws IOException, ApiError {
+		final String[] parts = rootDir.split(SEPARATOR);
+		/*
+		 * Recursively check folder structure starting with base directory
+		 */
+		RemoteFolder remoteFolder = this.getApiClient().listFolder(this.createPath(), true).execute();
+		for (int i = 0; i < parts.length; i++) {
+			final int idx = i;
+			final String subFolder = parts[idx];
+
+			RemoteFolder nxt = remoteFolder.children().stream()
+					.filter(re -> re.isFolder() && re.name().equals(subFolder)).findFirst().map(re -> re.asFolder())
+					.orElse(null);
+			if (nxt == null) {
+				// Remote folder not found -> create it and all necessary children
+				nxt = this.getApiClient().createFolder(remoteFolder.folderId(), subFolder).execute();
+			}
+			remoteFolder = nxt;
+		}
+		return remoteFolder;
+	}
+
+	/**
+	 * Strips the the directory suffix from a directory name
+	 * 
+	 * @param key Blob key
+	 * @return
+	 */
+	private static String stripDirectorySuffix(String key) {
+		String suffix = getDirectoryBlobSuffix(key);
+		if (suffix != null) {
+			return key.substring(0, key.lastIndexOf(suffix));
+		}
+		return key;
+	}
+
+	/**
+	 * Creates a directory blob (simply a new folder within the container)
+	 * 
+	 * @param conainerName Name of the container
+	 * @param blob         Directory blob
+	 * @return Etag of the blob (always null!)
+	 * @throws IOException
+	 */
+	private String putDirectoryBlob(String containerName, Blob blob) throws IOException {
+		final String blobName = blob.getMetadata().getName();
+		final String directory = stripDirectorySuffix(blobName);
+		try {
+			this.getApiClient().createFolder(this.createPath(containerName, directory)).execute();
+			return base16().lowerCase().encode(DIRECTORY_MD5);
+		} catch (IOException | ApiError e) {
+			throw new PCloudBlobStoreException(e);
+		}
+	}
+
 	@Override
 	public boolean containerExists(String container) {
 		this.pCloudContainerNameValidator.validate(container);
 		try {
 			final String path = createPath(container);
-			RemoteFolder remoteFolder = this.getApiClient().listFolder(path).execute();
+			final RemoteFolder remoteFolder = this.getApiClient().listFolder(path).execute();
 			return remoteFolder.isFolder();
 		} catch (ApiError e) {
 			final PCloudError pCloudError = PCloudError.parse(e);
@@ -145,7 +282,7 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	public Collection<String> getAllContainerNames() {
 		try {
 			final RemoteFolder rootFolder = this.getApiClient().listFolder(this.baseDirectory).execute();
-			final List<String> result = rootFolder.children().stream().map(re -> re.name())
+			final List<String> result = rootFolder.children().stream().filter(re -> re.isFolder()).map(re -> re.name())
 					.collect(Collectors.toList());
 			return result;
 		} catch (IOException | ApiError e) {
@@ -155,7 +292,6 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	@Override
 	public boolean createContainerInLocation(String container, Location location, CreateContainerOptions options) {
-		this.pCloudContainerNameValidator.validate(container);
 		return this.createContainerInLocation(this.getLocation(container), container, options);
 	}
 
@@ -171,7 +307,6 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	}
 
 	public boolean createContainerInLocation(Location location, String container, CreateContainerOptions options) {
-		this.pCloudContainerNameValidator.validate(container);
 		return createContainerInLocation(location, container);
 	}
 
@@ -202,7 +337,6 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	@Override
 	public void clearContainer(String container) {
-		this.pCloudContainerNameValidator.validate(container);
 		clearContainer(container, ListContainerOptions.Builder.recursive());
 	}
 
@@ -279,54 +413,11 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 		}
 	}
 
-	/**
-	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
-	 * k
-	 * 
-	 * @param key
-	 * @return
-	 * @return
-	 */
-	private static String getFileOfKey(String key) {
-
-		/*
-		 * First strip directory suffix
-		 */
-		String name = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
-		name = name.replace("\\", SEPARATOR);
-
-		/*
-		 * Then fetch name
-		 */
-		if (name.contains(SEPARATOR)) {
-			return name.substring(name.lastIndexOf(SEPARATOR) + 1);
-		}
-		return name;
-	}
-
-	/**
-	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
-	 * f1/f2/f3
-	 * 
-	 * @param key
-	 * @return
-	 */
-	private static String getFolderOfKey(String container, String key) {
-		String folder = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
-		folder = folder.replace("\\", SEPARATOR);
-		if (folder.contains(SEPARATOR)) {
-			folder = key.substring(0, key.lastIndexOf(SEPARATOR));
-			return container + SEPARATOR + folder;
-		}
-		return container;
-	}
-
 	@Override
-	public Iterable<String> getBlobKeysInsideContainer(String container, String prefix) throws IOException {
+	public SortedSet<String> getBlobKeysInsideContainer(String container, String prefix) throws IOException {
 		try {
-			final RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(container)).execute();
-			final List<String> keys = remoteFolder.children().stream().map(RemoteEntry::name)
-					.filter(re -> prefix != null ? re.startsWith(prefix) : true).collect(Collectors.toList());
+			final RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(container), true).execute();
+			final SortedSet<String> keys = getBlobKeysInsideContainer(remoteFolder, prefix);
 			return keys;
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
@@ -341,7 +432,8 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 			final Map<String, String> userMetadata = new HashMap<>();
 			userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
 
-			final Payload payload = remoteFile.size() == 0 ? new EmptyPayload() : new RemoteFilePayload(remoteFile);
+			final Payload payload = remoteFile.size() == 0 || remoteFile.isFolder() ? new EmptyPayload()
+					: new RemoteFilePayload(remoteFile);
 			final Blob blob = this.blobBuilders.get() //
 					.payload(payload) //
 					.contentType(remoteFile.contentType()) //
@@ -349,12 +441,12 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 					.eTag(remoteFile.hash()) //
 					.name(remoteFile.name()) //
 					.userMetadata(userMetadata) //
+					.type(remoteFile.isFolder() ? StorageType.FOLDER : StorageType.BLOB) //
 					.build();
 			blob.getMetadata().setLastModified(remoteFile.lastModified());
 			blob.getMetadata().setCreationDate(remoteFile.created());
 			blob.getMetadata().setId(remoteFile.id());
 			blob.getMetadata().setContainer(containerName);
-
 			return blob;
 		} catch (ApiError e) {
 			final PCloudError pCloudError = PCloudError.parse(e);
@@ -372,21 +464,6 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 		}
 	}
 
-	/**
-	 * Utility method to check if the blob key is actually a directory name
-	 * 
-	 * @param key Blob key
-	 * @return
-	 */
-	private static String getDirectoryBlobSuffix(String key) {
-		for (String suffix : BlobStoreConstants.DIRECTORY_SUFFIXES) {
-			if (key.endsWith(suffix)) {
-				return suffix;
-			}
-		}
-		return null;
-	}
-
 	@Override
 	public String putBlob(String containerName, Blob blob) throws IOException {
 		this.pCloudContainerNameValidator.validate(containerName);
@@ -402,76 +479,10 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 		try {
 			// Check if parent folder exists
-			checkAndCreateParentFolder(rootDir);
-
-			final String path = createPath(rootDir);
-			final DataSource ds = dataSourceFromBlob(blob);
-			final Call<RemoteFile> createdFile = this.getApiClient().createFile(path, name, ds,
-					UploadOptions.OVERRIDE_FILE);
-			RemoteFile remoteFile = createdFile.execute();
+			final RemoteFolder parentFolder = checkAndCreateParentFolder(rootDir);
+			final RemoteFile remoteFile = this.getApiClient()
+					.createFile(parentFolder, name, dataSourceFromBlob(blob), UploadOptions.OVERRIDE_FILE).execute();
 			return remoteFile.hash();
-		} catch (IOException | ApiError e) {
-			throw new PCloudBlobStoreException(e);
-		}
-	}
-
-	/**
-	 * Checks if all directory parts exists, and create them if necessary
-	 * 
-	 * @param rootDir
-	 * @throws ApiError
-	 * @throws IOException
-	 */
-	private void checkAndCreateParentFolder(String rootDir) throws IOException, ApiError {
-		final String[] parts = rootDir.split(SEPARATOR);
-		/*
-		 * Recursively check folder structure starting with base directory
-		 */
-		RemoteFolder remoteFolder = this.getApiClient().listFolder(this.createPath(), true).execute();
-		for (int i = 0; i < parts.length; i++) {
-			final int idx = i;
-			final String subFolder = parts[idx];
-
-			RemoteFolder nxt = remoteFolder.children().stream()
-					.filter(re -> re.isFolder() && re.name().equals(subFolder)).findFirst().map(re -> re.asFolder())
-					.orElse(null);
-			if (nxt == null) {
-				// Remote folder not found -> create it and all necessary children
-				nxt = this.getApiClient().createFolder(remoteFolder.folderId(), subFolder).execute();
-			}
-			remoteFolder = nxt;
-		}
-
-	}
-
-	/**
-	 * Strips the the directory suffix from a directory name
-	 * 
-	 * @param key Blob key
-	 * @return
-	 */
-	private static String stripDirectorySuffix(String key) {
-		String suffix = getDirectoryBlobSuffix(key);
-		if (suffix != null) {
-			return key.substring(0, key.lastIndexOf(suffix));
-		}
-		return key;
-	}
-
-	/**
-	 * Creates a directory blob (simply a new folder within the container)
-	 * 
-	 * @param conainerName Name of the container
-	 * @param blob         Directory blob
-	 * @return Etag of the blob (always null!)
-	 * @throws IOException
-	 */
-	private String putDirectoryBlob(String containerName, Blob blob) throws IOException {
-		final String blobName = blob.getMetadata().getName();
-		final String directory = stripDirectorySuffix(blobName);
-		try {
-			this.getApiClient().createFolder(this.createPath(containerName, directory)).execute();
-			return base16().lowerCase().encode(DIRECTORY_MD5);
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}
