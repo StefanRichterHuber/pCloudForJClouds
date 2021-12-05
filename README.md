@@ -56,7 +56,7 @@ or use the attached dockerfile to build a docker image.
 ## Limitations
 ***Use this program at your own risk! There is no guarantee it transfers your files reliably.***
 
-The current implementation of the pCloud BlobStore actually provides a custom `org.jclouds.blobstore.LocalStorageStrategy` for a `org.jclouds.blobstore.config.LocalBlobStore`. The `org.jclouds.blobstore.config.LocalBlobStore` seems to be optimized for local file systems and not a perfect fit for remote access. There are some optimizations for my personal use case, but I can not guaratee this works in any possible use case. ***Only use this project 
+The current implementation of the pCloud BlobStore actually provides a custom `org.jclouds.blobstore.LocalStorageStrategy` for a `org.jclouds.blobstore.config.LocalBlobStore`. The `org.jclouds.blobstore.config.LocalBlobStore` seems to be optimized for local file systems and not a perfect fit for remote access. There are some optimizations for my personal use case, but I can not guaratee this works in any possible use case.
 
 ## Results
 This S3 proxy is at least two times faster than web dav access (tested with several file sizes). But more important, it is far more stable and works perfectly as backup target for QNAP Hybrid Sync Backup®.
