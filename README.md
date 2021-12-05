@@ -10,7 +10,7 @@ Since [S3Proxy](https://github.com/gaul/s3proxy) uses [Apache jClouds](https://j
 
 ## Content 
 Java application containing both a BlobStore implementation for [Apache jClouds](https://jclouds.apache.org/) in the package `com.github.stefanrichterhuber.pCloudForjClouds` and a small main application under `com.github.stefanrichterhuber.s3proxy` connecting this BlobStore with S3Proxy.
-The pCloud oauth token is transfered as the identity and credential (both containing the identical token) of S3 user accessing the proxy. This way the proxy has build-in authentication support and there is no need to store pCloud credentials on the proxy in any way.
+The pCloud oauth token is transferred  as the identity and credential (both containing the identical token) of S3 user accessing the proxy. This way the proxy has built-in authentication support and there is no need to store pCloud credentials on the proxy in any way.
 A pCloud oauth token can be generated using the [pCloud web api](https://docs.pcloud.com/methods/oauth_2.0/authorize.html).
 
 ## Example 
@@ -43,10 +43,18 @@ A pCloud oauth token can be generated using the [pCloud web api](https://docs.pc
  ```
 
 ## Deployment
-Upon building the project with maven the `maven-jar-plugin` is used to generate an executable jar, which just needs the generate `libs` folder and the main `pcloud-s3proxy*.jar` to run.
+Upon building the project with maven, the `maven-jar-plugin` is used to generate an executable jar, which just needs the generated `libs` folder and the main `pcloud-s3proxy*.jar` to run.
 
 ```cmd
 java -jar pcloud-s3proxy.jar -e 0.0.0.0:8080
 ```
 
 or use the attached dockerfile to build a docker image.
+
+## Limitations
+***Use this program at your own risk! There is no guarantee it transfers your files reliably.***
+
+The current implementation of the pCloud BlobStore actually provides a custom `org.jclouds.blobstore.LocalStorageStrategy` for a `org.jclouds.blobstore.config.LocalBlobStore`. The `org.jclouds.blobstore.config.LocalBlobStore` seems to be optimized for local file systems and not a perfect fit for remote access. There are some optimizations for my personal use case, but I can not guaratee this works in any possible use case. ***Only use this project 
+
+## Results
+This S3 proxy is at least two times faster than web dav access (tested with several file sizes). But more important, it is far more stable and works perfectly as backup target for QNAP Hybrid Sync Backup®.
