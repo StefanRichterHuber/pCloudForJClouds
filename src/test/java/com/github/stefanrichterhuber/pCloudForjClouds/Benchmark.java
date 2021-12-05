@@ -1,4 +1,4 @@
-package eu.stefanhuber.jclouds;
+package com.github.stefanrichterhuber.pCloudForjClouds;
 
 import static org.junit.Assert.assertNotNull;
 
@@ -33,15 +33,14 @@ import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.github.sardine.Sardine;
 import com.github.sardine.SardineFactory;
+import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
+import com.github.stefanrichterhuber.s3proxy.DynamicPCloudBlobStoreLocator;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
 import com.pcloud.sdk.Authenticators;
 import com.pcloud.sdk.DataSource;
 import com.pcloud.sdk.PCloudSdk;
 import com.pcloud.sdk.RemoteFile;
-
-import eu.stefanhuber.jclouds.pcloud.reference.PCloudConstants;
-import eu.stefanhuber.s3proxy.DynamicPCloudBlobStoreLocator;
 
 public class Benchmark {
 	private static final int contentSize = 100;
