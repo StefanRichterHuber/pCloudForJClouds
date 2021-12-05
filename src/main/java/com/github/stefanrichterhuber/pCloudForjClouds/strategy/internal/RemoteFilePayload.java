@@ -38,7 +38,7 @@ class RemoteFilePayload extends BasePayload<RemoteFile> {
 	 * {@link RemoteFile}s and there is no guarantee that this {@link InputStream}
 	 * is closed, leaving dangling connections to the pcloud servers.
 	 * 
-	 * @author stefa
+	 * @author Stefan Richter-Huber
 	 *
 	 */
 	private static class LazyInputStream extends InputStream {

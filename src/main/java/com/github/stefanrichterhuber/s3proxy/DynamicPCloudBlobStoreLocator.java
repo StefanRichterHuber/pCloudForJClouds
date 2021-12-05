@@ -14,9 +14,9 @@ import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.common.collect.Maps;
 
 /**
- * This S3Proxy {@link BlobStoreLocator} dynamically creates pcloud
+ * This S3Proxy {@link BlobStoreLocator} dynamically creates pCloud
  * {@link BlobStore} authenticated with the given identity. This way the s3proxy
- * does not have to known the pcloud secrets beforehand but retrieves it from
+ * does not have to known the pCloud secrets beforehand but retrieves it from
  * the s3 client. Access key and secret key from aws client must be both the
  * pcloud client secret!
  * 
