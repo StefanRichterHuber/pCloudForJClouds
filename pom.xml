@@ -105,7 +105,7 @@
 						<manifest>
 							<addClasspath>true</addClasspath>
 							<classpathPrefix>libs/</classpathPrefix>
-							<mainClass>eu.stefanhuber.s3proxy.Main</mainClass>
+							<mainClass>com.github.stefanrichterhuber.s3proxy.Main</mainClass>
 						</manifest>
 					</archive>
 				</configuration>
