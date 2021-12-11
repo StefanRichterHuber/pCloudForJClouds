@@ -7,7 +7,7 @@ import org.jclouds.apis.internal.BaseApiMetadata;
 import org.jclouds.blobstore.BlobStoreContext;
 import org.jclouds.rest.internal.BaseHttpApiMetadata;
 
-import com.github.stefanrichterhuber.pCloudForjClouds.config.PCloudBlobStoreContextModule;
+import com.github.stefanrichterhuber.pCloudForjClouds.config.PCloudCustomBlobStoreContextModule;
 
 public class PCloudApiMetadata extends BaseApiMetadata {
 
@@ -42,7 +42,7 @@ public class PCloudApiMetadata extends BaseApiMetadata {
          .documentation(URI.create("http://www.jclouds.org/documentation/userguide/blobstore-guide"))
          .defaultProperties(PCloudApiMetadata.defaultProperties())
          .view(BlobStoreContext.class)
-         .defaultModule(PCloudBlobStoreContextModule.class);
+         .defaultModule(PCloudCustomBlobStoreContextModule.class);
       }
 
       @Override

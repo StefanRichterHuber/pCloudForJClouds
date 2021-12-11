@@ -20,6 +20,7 @@ import org.jclouds.blobstore.BlobStoreContext;
 import org.jclouds.blobstore.domain.Blob;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
+import org.jclouds.blobstore.options.CopyOptions;
 import org.jclouds.blobstore.options.GetOptions;
 import org.junit.Test;
 
@@ -27,7 +28,7 @@ import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 
 public class PCloudForJCloudTest {
 
-	private static final int TIME_TO_WAIT = 500;
+	private static final int TIME_TO_WAIT = 750;
 
 	private static BlobStore getBlobStore() {
 		Properties properties = new Properties();
@@ -61,7 +62,7 @@ public class PCloudForJCloudTest {
 		// Container should not exist in the end
 		assertFalse(blobStore.containerExists(container));
 	}
-	
+
 	@Test
 	public void shouldCreateFoldersForBlob() throws InterruptedException {
 		BlobStore blobStore = getBlobStore();
@@ -69,19 +70,17 @@ public class PCloudForJCloudTest {
 		String blobName = "f1/f2/f3/f4/" + UUID.randomUUID().toString() + ".txt";
 		String blobContent = UUID.randomUUID().toString();
 
-		
 		blobStore.createContainerInLocation(null, container);
 		Thread.sleep(TIME_TO_WAIT);
 		assertTrue(blobStore.containerExists(container));
-		
-		Blob contentBlob = blobStore
-				.blobBuilder(blobName) //
+
+		Blob contentBlob = blobStore.blobBuilder(blobName) //
 				.payload(blobContent) //
 				.build();
 		blobStore.putBlob(container, contentBlob);
 		Thread.sleep(TIME_TO_WAIT);
 		blobStore.blobExists(container, blobName);
-		
+
 		blobStore.deleteContainer(container);
 	}
 
@@ -142,16 +141,15 @@ public class PCloudForJCloudTest {
 		assertTrue(blobStore.blobExists(container, folder));
 
 		// Insert file into test folder
-		Blob contentBlob = blobStore
-				.blobBuilder(folder + blobName) //
+		Blob contentBlob = blobStore.blobBuilder(folder + blobName) //
 				.payload(blobContent) //
 				.build();
-		
+
 		blobStore.putBlob(container, contentBlob);
 		Thread.sleep(TIME_TO_WAIT);
 		// Check if test content is present
 		assertTrue(blobStore.blobExists(container, folder + blobName));
-		
+
 		// Cleanup
 		blobStore.deleteContainer(container);
 
@@ -268,7 +266,55 @@ public class PCloudForJCloudTest {
 		// Blob should be deleted
 		assertFalse(blobStore.blobExists(container, blobName));
 		assertNull(blobStore.getBlob(container, blobName));
+		blobStore.deleteContainer(container);
 
 	}
-	
+
+	@Test
+	public void shouldCopyBlob() throws InterruptedException, IOException {
+		BlobStore blobStore = getBlobStore();
+		String container = UUID.randomUUID().toString();
+
+		String sourceBlobName = UUID.randomUUID().toString() + ".txt";
+		String blobContent = UUID.randomUUID().toString();
+
+		String targetBlobName = UUID.randomUUID().toString() + ".txt";
+
+		// Create random container
+		blobStore.createContainerInLocation(null, container);
+		assertTrue(blobStore.containerExists(container));
+
+		// Upload content
+		Blob blob = blobStore.blobBuilder(sourceBlobName)//
+				.payload(blobContent) //
+				.build();
+		String etag = blobStore.putBlob(container, blob);
+		assertNotNull("Should have an etag", etag);
+		Thread.sleep(TIME_TO_WAIT);
+
+		// Blob should exist
+		assertTrue(blobStore.blobExists(container, sourceBlobName));
+
+		// now copy blob and rename it
+		String targetEtag = blobStore.copyBlob(container, sourceBlobName, container, targetBlobName,
+				CopyOptions.builder().ifMatch(etag).build());
+		Thread.sleep(TIME_TO_WAIT);
+		// TargetBlob should exist
+		assertTrue(blobStore.blobExists(container, targetBlobName));
+
+		// Content should by the same
+
+		Blob result = blobStore.getBlob(container, targetBlobName, GetOptions.Builder.ifETagMatches(targetEtag));
+		assertNotNull(result);
+		String resultContent = IOUtils.toString(result.getPayload().openStream(), StandardCharsets.UTF_8.name());
+		assertEquals("Content should be equal", blobContent, resultContent);
+
+		// Delete blobs
+		blobStore.removeBlob(container, sourceBlobName);
+		blobStore.removeBlob(container, targetBlobName);
+		blobStore.deleteContainer(container);
+		Thread.sleep(TIME_TO_WAIT);
+		
+	}
+
 }
