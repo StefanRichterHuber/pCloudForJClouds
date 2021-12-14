@@ -18,10 +18,10 @@ import com.pcloud.sdk.RemoteFile;
  * @author Stefan Richter-Huber
  *
  */
-class RemoteFilePayload extends BasePayload<RemoteFile> {
+public class RemoteFilePayload extends BasePayload<RemoteFile> {
 	/**
 	 * Factory interface for lazy openning streams.
-	 * @author stefa
+	 * @author Stefan Richter-Huber
 	 *
 	 */
 	@FunctionalInterface

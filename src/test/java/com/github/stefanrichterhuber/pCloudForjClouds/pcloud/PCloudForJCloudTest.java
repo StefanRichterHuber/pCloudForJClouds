@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
@@ -18,15 +19,22 @@ import org.jclouds.ContextBuilder;
 import org.jclouds.blobstore.BlobStore;
 import org.jclouds.blobstore.BlobStoreContext;
 import org.jclouds.blobstore.domain.Blob;
+import org.jclouds.blobstore.domain.MultipartUpload;
+import org.jclouds.blobstore.domain.MutableBlobMetadata;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
 import org.jclouds.blobstore.options.CopyOptions;
 import org.jclouds.blobstore.options.GetOptions;
+import org.jclouds.io.Payloads;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
+import com.google.common.base.Charsets;
 
 public class PCloudForJCloudTest {
+	private final static Logger LOGGER = LoggerFactory.getLogger(PCloudForJCloudTest.class);
 
 	private static final int TIME_TO_WAIT = 750;
 
@@ -313,8 +321,91 @@ public class PCloudForJCloudTest {
 		blobStore.removeBlob(container, sourceBlobName);
 		blobStore.removeBlob(container, targetBlobName);
 		blobStore.deleteContainer(container);
+	}
+
+	@Test
+	public void shouldSupportMultiPartUpload() throws InterruptedException, IOException {
+		BlobStore blobStore = getBlobStore();
+		String container = UUID.randomUUID().toString();
+		List<String> content = Arrays.asList("O rose, thou art sick!\r\n", "The invisible worm,\r\n",
+				"That flies in the night,\r\n", "In the howling storm.\r\n", "Has found out thy bed\r\n",
+				"Of crimson joy,\r\n", "And his dark secret love\r\n", "Does thy life destroy.");
+		String mergedContent = content.stream().collect(Collectors.joining());
+		String blobName = UUID.randomUUID().toString() + ".txt";
+
+		LOGGER.info("Uploading to blob {} in container {}", blobName, container);
+
+		blobStore.createContainerInLocation(null, container);
+		assertTrue(blobStore.containerExists(container));
 		Thread.sleep(TIME_TO_WAIT);
+
+		MutableBlobMetadata metaData = blobStore.blobBuilder(blobName).payload(mergedContent)
+				.contentLength(mergedContent.getBytes(Charsets.UTF_8).length).build().getMetadata();
+		MultipartUpload multipartUpload = blobStore.initiateMultipartUpload(container, metaData, null);
+		assertNotNull(multipartUpload);
+
+		for (int i = 0; i < content.size(); i++) {
+			blobStore.uploadMultipartPart(multipartUpload, i + 1, Payloads.newStringPayload(content.get(i)));
+			Thread.sleep(1000);
+		}
+		String etag = blobStore.completeMultipartUpload(multipartUpload, null);
+
+		// Get content and check if it matches
+		Thread.sleep(TIME_TO_WAIT);
+		Blob blob = blobStore.getBlob(container, blobName);
 		
+		assertEquals(etag, blob.getMetadata().getETag());
+		String resultContent = IOUtils.toString(blob.getPayload().openStream(), StandardCharsets.UTF_8.name());
+		assertEquals(mergedContent, resultContent);
+
+		blobStore.deleteContainer(container);
+	}
+
+	/**
+	 * Test multipart upload, but not all parts appear in order
+	 * 
+	 * @throws InterruptedException
+	 * @throws IOException
+	 */
+	@Test
+	public void shouldSupportMultiPartUploadWithRandomOrder() throws InterruptedException, IOException {
+		BlobStore blobStore = getBlobStore();
+		String container = UUID.randomUUID().toString();
+		List<String> content = Arrays.asList("O rose, thou art sick!\r\n", "The invisible worm,\r\n",
+				"That flies in the night,\r\n", "In the howling storm.\r\n", "Has found out thy bed\r\n",
+				"Of crimson joy,\r\n", "And his dark secret love\r\n", "Does thy life destroy.");
+		String mergedContent = content.stream().collect(Collectors.joining());
+		long contentLength = mergedContent.getBytes(Charsets.UTF_8).length;
+		String blobName = UUID.randomUUID().toString() + ".txt";
+
+		LOGGER.info("Uploading to blob {} in container {}", blobName, container);
+
+		blobStore.createContainerInLocation(null, container);
+		assertTrue(blobStore.containerExists(container));
+		Thread.sleep(TIME_TO_WAIT);
+
+		MutableBlobMetadata metaData = blobStore.blobBuilder(blobName).payload(mergedContent)
+				.contentLength(contentLength).build().getMetadata();
+		MultipartUpload multipartUpload = blobStore.initiateMultipartUpload(container, metaData, null);
+		assertNotNull(multipartUpload);
+
+		int[] order = { 0, 2, 4, 7, 6, 1, 3, 5 };
+		for (int o = 0; o < order.length; o++) {
+			int i = order[o];
+			blobStore.uploadMultipartPart(multipartUpload, i + 1, Payloads.newStringPayload(content.get(i)));
+			Thread.sleep(1000);
+		}
+
+		String etag = blobStore.completeMultipartUpload(multipartUpload, null);
+
+		// Get content and check if it matches
+		Thread.sleep(TIME_TO_WAIT);
+		Blob blob = blobStore.getBlob(container, blobName);
+		assertEquals(etag, blob.getMetadata().getETag());
+		String resultContent = IOUtils.toString(blob.getPayload().openStream(), StandardCharsets.UTF_8.name());
+		assertEquals(mergedContent, resultContent);
+
+		blobStore.deleteContainer(container);
 	}
 
 }

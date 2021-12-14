@@ -8,7 +8,7 @@ import com.pcloud.sdk.ApiError;
  * @see https://docs.pcloud.com/errors/
  *
  */
-enum PCloudError {
+public enum PCloudError {
 	LOGIN_REQUIRED(1000), // Log in required.
 	NO_FULL_ID_PROVIED(1001), // No full path or name/folderid provided.
 	NO_ID_PROVIDED(1004), // No fileid or path provided.

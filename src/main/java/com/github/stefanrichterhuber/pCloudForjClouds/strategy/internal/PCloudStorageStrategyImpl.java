@@ -19,7 +19,6 @@ import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Provider;
 
-import org.apache.commons.io.IOUtils;
 import org.jclouds.blobstore.LocalStorageStrategy;
 import org.jclouds.blobstore.domain.Blob;
 import org.jclouds.blobstore.domain.BlobAccess;
@@ -36,6 +35,7 @@ import org.jclouds.domain.Location;
 import org.jclouds.io.Payload;
 import org.jclouds.logging.Logger;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.BlobDataSource;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudBlobKeyValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudContainerNameValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
@@ -43,7 +43,6 @@ import com.google.common.base.Supplier;
 import com.google.common.hash.Hashing;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
-import com.pcloud.sdk.Call;
 import com.pcloud.sdk.DataSource;
 import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFile;
@@ -118,8 +117,7 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 	 * @throws IOException
 	 */
 	private static DataSource dataSourceFromBlob(Blob blob) throws IOException {
-		byte[] content = IOUtils.toByteArray(blob.getPayload().openStream());
-		return DataSource.create(content);
+		return new BlobDataSource(blob);
 	}
 
 	/**
@@ -291,22 +289,18 @@ public class PCloudStorageStrategyImpl implements LocalStorageStrategy {
 
 	@Override
 	public boolean createContainerInLocation(String container, Location location, CreateContainerOptions options) {
-		return this.createContainerInLocation(this.getLocation(container), container, options);
+		return this.createContainerInLocation(this.getLocation(container), container);
 	}
 
-	public boolean createContainerInLocation(Location location, String container) {
+	private boolean createContainerInLocation(Location location, String container) {
 		this.pCloudContainerNameValidator.validate(container);
 		try {
-			String path = createPath(container);
-			RemoteFolder remoteFolder = this.getApiClient().createFolder(path).execute();
+			final String path = createPath(container);
+			final RemoteFolder remoteFolder = this.getApiClient().createFolder(path).execute();
 			return remoteFolder.isFolder();
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}
-	}
-
-	public boolean createContainerInLocation(Location location, String container, CreateContainerOptions options) {
-		return createContainerInLocation(location, container);
 	}
 
 	@Override

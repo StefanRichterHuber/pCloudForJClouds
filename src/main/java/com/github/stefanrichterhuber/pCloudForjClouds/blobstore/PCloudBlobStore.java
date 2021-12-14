@@ -1,4 +1,4 @@
-package com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal;
+package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.tryFind;
@@ -16,7 +16,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -25,6 +24,7 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
@@ -43,7 +43,6 @@ import org.jclouds.blobstore.KeyNotFoundException;
 import org.jclouds.blobstore.domain.Blob;
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.BlobBuilder;
-import org.jclouds.blobstore.domain.BlobBuilder.PayloadBlobBuilder;
 import org.jclouds.blobstore.domain.BlobMetadata;
 import org.jclouds.blobstore.domain.ContainerAccess;
 import org.jclouds.blobstore.domain.MultipartPart;
@@ -52,7 +51,6 @@ import org.jclouds.blobstore.domain.MutableStorageMetadata;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
 import org.jclouds.blobstore.domain.StorageType;
-import org.jclouds.blobstore.domain.Tier;
 import org.jclouds.blobstore.domain.internal.MutableStorageMetadataImpl;
 import org.jclouds.blobstore.domain.internal.PageSetImpl;
 import org.jclouds.blobstore.options.CopyOptions;
@@ -73,9 +71,15 @@ import org.jclouds.io.ContentMetadata;
 import org.jclouds.io.Payload;
 import org.jclouds.logging.Logger;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.BlobDataSource;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudMultipartUpload;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudBlobKeyValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudContainerNameValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
+import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.EmptyPayload;
+import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.PCloudBlobStoreException;
+import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.PCloudError;
+import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.RemoteFilePayload;
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
 import com.google.common.base.Predicate;
@@ -84,9 +88,7 @@ import com.google.common.base.Supplier;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
-import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
-import com.google.common.io.BaseEncoding;
 import com.google.common.io.ByteSource;
 import com.google.common.net.HttpHeaders;
 import com.pcloud.sdk.ApiClient;
@@ -99,11 +101,17 @@ import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
 import com.pcloud.sdk.UploadOptions;
 
+/**
+ * {@link BlobStore} for pCloud
+ * 
+ * @see https://docs.pcloud.com/
+ * @author Stefan Richter-Huber
+ *
+ */
 @Singleton
 public final class PCloudBlobStore implements BlobStore {
 
 	private static final String SEPARATOR = "/";
-	private static final String MULTIPART_PREFIX = ".mpus-";
 	private static final byte[] EMPTY_CONTENT = new byte[0];
 	private static final byte[] DIRECTORY_MD5 = Hashing.md5().hashBytes(EMPTY_CONTENT).asBytes();
 
@@ -118,6 +126,8 @@ public final class PCloudBlobStore implements BlobStore {
 	private final ApiClient apiClient;
 	private final BlobStoreContext context;
 	private final Supplier<Set<? extends Location>> locations;
+	private final MultipartUploadFactory multipartUploadFactory;
+	private final Map<String, PCloudMultipartUpload> currentMultipartUploads = new ConcurrentHashMap<>();
 
 	@Inject
 	protected PCloudBlobStore( //
@@ -127,6 +137,7 @@ public final class PCloudBlobStore implements BlobStore {
 			PCloudContainerNameValidator pCloudContainerNameValidator, //
 			PCloudBlobKeyValidator pCloudBlobKeyValidator, //
 			@Memoized Supplier<Set<? extends Location>> locations, //
+			MultipartUploadFactory multipartUploadFactory, //
 			Supplier<Location> defaultLocation //
 	) {
 		this.locations = checkNotNull(locations, "locations");
@@ -138,6 +149,7 @@ public final class PCloudBlobStore implements BlobStore {
 		this.pCloudBlobKeyValidator = checkNotNull(pCloudBlobKeyValidator, "PCloud blob key validator");
 		this.defaultLocation = defaultLocation;
 		this.apiClient = checkNotNull(apiClient, "PCloud api client");
+		this.multipartUploadFactory = checkNotNull(multipartUploadFactory, "multipartupload factory");
 
 	}
 
@@ -275,9 +287,8 @@ public final class PCloudBlobStore implements BlobStore {
 	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
 	 * k
 	 * 
-	 * @param key
-	 * @return
-	 * @return
+	 * @param key Blob key
+	 * @return pure file name
 	 */
 	private static String getFileOfKey(String key) {
 
@@ -300,8 +311,8 @@ public final class PCloudBlobStore implements BlobStore {
 	 * If this key contains a folder structure, get the folders. E.g.: f1/f2/f3/k ->
 	 * f1/f2/f3
 	 * 
-	 * @param key
-	 * @return
+	 * @param key Blobname
+	 * @return Parent folder name
 	 */
 	private static String getFolderOfKey(String container, String key) {
 		String folder = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
@@ -321,8 +332,7 @@ public final class PCloudBlobStore implements BlobStore {
 	 * @throws IOException
 	 */
 	private static DataSource dataSourceFromBlob(Blob blob) throws IOException {
-		byte[] content = IOUtils.toByteArray(blob.getPayload().openStream());
-		return DataSource.create(content);
+		return new BlobDataSource(blob);
 	}
 
 	/**
@@ -456,6 +466,8 @@ public final class PCloudBlobStore implements BlobStore {
 			metadata.setCreationDate(remoteFolder.created());
 			metadata.setLastModified(remoteFolder.lastModified());
 			metadata.setId(remoteFolder.id());
+
+			logger.debug("Requested storage metadata for container %s: %s", container, metadata);
 
 			return metadata;
 		} catch (ApiError e) {
@@ -609,6 +621,8 @@ public final class PCloudBlobStore implements BlobStore {
 
 	@Override
 	public PageSet<? extends StorageMetadata> list() {
+		logger.info("Requested storage metadata for all containers");
+
 		ArrayList<String> containers = new ArrayList<String>(getAllContainerNames());
 		Collections.sort(containers);
 
@@ -681,6 +695,7 @@ public final class PCloudBlobStore implements BlobStore {
 	@SuppressWarnings("deprecation")
 	@Override
 	public PageSet<? extends StorageMetadata> list(String containerName, ListContainerOptions options) {
+		logger.info("Requested storage metadata for container %s with options %s", containerName, options);
 		if (options.getDir() != null && options.getPrefix() != null) {
 			throw new IllegalArgumentException("Cannot set both prefix and directory");
 		}
@@ -1136,150 +1151,83 @@ public final class PCloudBlobStore implements BlobStore {
 		}
 	}
 
+	/**
+	 * Utility method to find the {@link PCloudMultipartUpload} implementation for a
+	 * given {@link MultipartUpload} instance
+	 * 
+	 * @param mpu
+	 * @return
+	 */
+	private PCloudMultipartUpload resolveUpload(MultipartUpload mpu) {
+		if (mpu instanceof PCloudMultipartUpload) {
+			return (PCloudMultipartUpload) mpu;
+		} else {
+			final PCloudMultipartUpload pCloudMultipartUpload = this.currentMultipartUploads.get(mpu.id());
+			if (pCloudMultipartUpload != null) {
+				return pCloudMultipartUpload;
+			} else {
+				throw new IllegalStateException("No on-going upload found for id " + mpu.id());
+			}
+		}
+	}
+
 	@Override
 	public MultipartUpload initiateMultipartUpload(String container, BlobMetadata blobMetadata, PutOptions options) {
 		assertContainerExists(container);
-		String uploadId = UUID.randomUUID().toString();
-		// create a stub blob
-		Blob blob = blobBuilder(MULTIPART_PREFIX + uploadId + "-" + blobMetadata.getName() + "-stub")
-				.payload(ByteSource.empty()).build();
-		putBlob(container, blob);
-		return MultipartUpload.create(container, blobMetadata.getName(), uploadId, blobMetadata, options);
+		final String uploadId = UUID.randomUUID().toString();
+		final String name = getFileOfKey(blobMetadata.getName());
+		final String rootDir = getFolderOfKey(container, blobMetadata.getName());
+
+		// Check if parent folder exists
+		try {
+			final RemoteFolder targetFolder = assureParentFolder(rootDir);
+			PCloudMultipartUpload upload = this.multipartUploadFactory.create(targetFolder.folderId(), container, name,
+					uploadId, blobMetadata, options);
+			upload.start();
+			this.currentMultipartUploads.put(uploadId, upload);
+			return upload;
+		} catch (IOException | ApiError e) {
+			throw new RuntimeException(e);
+		}
 	}
 
 	@Override
 	public void abortMultipartUpload(MultipartUpload mpu) {
-		List<MultipartPart> parts = listMultipartUpload(mpu);
-		List<String> keys = new ArrayList<>(
-				parts.stream().map(part -> MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-" + part.partNumber())
-						.collect(Collectors.toList()));
-		keys.add(MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-stub");
-		this.removeBlobs(mpu.containerName(), keys);
+		resolveUpload(mpu).abort();
+		this.currentMultipartUploads.remove(mpu.id());
 	}
 
 	@Override
 	public String completeMultipartUpload(MultipartUpload mpu, List<MultipartPart> parts) {
-		ImmutableList.Builder<Blob> blobs = ImmutableList.builder();
-		long contentLength = 0;
-		Hasher md5Hasher = Hashing.md5().newHasher();
-
-		for (MultipartPart part : parts) {
-			Blob blobPart = getBlob(mpu.containerName(),
-					MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-" + part.partNumber());
-			contentLength += blobPart.getMetadata().getContentMetadata().getContentLength();
-			blobs.add(blobPart);
-			if (blobPart.getMetadata().getETag() != null) {
-				md5Hasher.putBytes(BaseEncoding.base16().lowerCase().decode(blobPart.getMetadata().getETag()));
-			}
-		}
-		String mpuETag = new StringBuilder("\"").append(md5Hasher.hash()).append("-").append(parts.size()).append("\"")
-				.toString();
-		PayloadBlobBuilder blobBuilder = blobBuilder(mpu.blobName()).userMetadata(mpu.blobMetadata().getUserMetadata())
-				.payload(new MultiBlobInputStream(blobs.build())).contentLength(contentLength).eTag(mpuETag);
-		String cacheControl = mpu.blobMetadata().getContentMetadata().getCacheControl();
-		if (cacheControl != null) {
-			blobBuilder.cacheControl(cacheControl);
-		}
-		String contentDisposition = mpu.blobMetadata().getContentMetadata().getContentDisposition();
-		if (contentDisposition != null) {
-			blobBuilder.contentDisposition(contentDisposition);
-		}
-		String contentEncoding = mpu.blobMetadata().getContentMetadata().getContentEncoding();
-		if (contentEncoding != null) {
-			blobBuilder.contentEncoding(contentEncoding);
-		}
-		String contentLanguage = mpu.blobMetadata().getContentMetadata().getContentLanguage();
-		if (contentLanguage != null) {
-			blobBuilder.contentLanguage(contentLanguage);
-		}
-		// intentionally not copying MD5
-		String contentType = mpu.blobMetadata().getContentMetadata().getContentType();
-		if (contentType != null) {
-			blobBuilder.contentType(contentType);
-		}
-		Date expires = mpu.blobMetadata().getContentMetadata().getExpires();
-		if (expires != null) {
-			blobBuilder.expires(expires);
-		}
-		Tier tier = mpu.blobMetadata().getTier();
-		if (tier != null) {
-			blobBuilder.tier(tier);
-		}
-
-		putBlob(mpu.containerName(), blobBuilder.build());
-
-		for (MultipartPart part : parts) {
-			removeBlob(mpu.containerName(),
-					MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-" + part.partNumber());
-		}
-		removeBlob(mpu.containerName(), MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-stub");
-
-		setBlobAccess(mpu.containerName(), mpu.blobName(), mpu.putOptions().getBlobAccess());
-
-		return mpuETag;
+		final String etag = resolveUpload(mpu).complete();
+		this.currentMultipartUploads.remove(mpu.id());
+		return etag;
 	}
 
 	@Override
 	public MultipartPart uploadMultipartPart(MultipartUpload mpu, int partNumber, Payload payload) {
-		String partName = MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-" + partNumber;
-		Blob blob = blobBuilder(partName).payload(payload).build();
-		String partETag = putBlob(mpu.containerName(), blob);
-		BlobMetadata metadata = blobMetadata(mpu.containerName(), partName);
-		long partSize = metadata.getContentMetadata().getContentLength();
-		return MultipartPart.create(partNumber, partSize, partETag, metadata.getLastModified());
+		try {
+			return resolveUpload(mpu).append(partNumber, payload);
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
 	@Override
 	public List<MultipartPart> listMultipartUpload(MultipartUpload mpu) {
-		ImmutableList.Builder<MultipartPart> parts = ImmutableList.builder();
-		ListContainerOptions options = new ListContainerOptions()
-				.prefix(MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-").recursive();
-		while (true) {
-			PageSet<? extends StorageMetadata> pageSet = list(mpu.containerName(), options);
-			for (StorageMetadata sm : pageSet) {
-				if (sm.getName().endsWith("-stub")) {
-					continue;
-				}
-				int partNumber = Integer.parseInt(
-						sm.getName().substring((MULTIPART_PREFIX + mpu.id() + "-" + mpu.blobName() + "-").length()));
-				long partSize = sm.getSize();
-				parts.add(MultipartPart.create(partNumber, partSize, sm.getETag(), sm.getLastModified()));
-			}
-			if (pageSet.isEmpty() || pageSet.getNextMarker() == null) {
-				break;
-			}
-			options.afterMarker(pageSet.getNextMarker());
-		}
-		return parts.build();
+		return resolveUpload(mpu).getParts();
 	}
 
 	@Override
 	public List<MultipartUpload> listMultipartUploads(String container) {
-		assertContainerExists(container);
-		ImmutableList.Builder<MultipartUpload> mpus = ImmutableList.builder();
-		ListContainerOptions options = new ListContainerOptions().prefix(MULTIPART_PREFIX).recursive();
-		int uuidLength = UUID.randomUUID().toString().length();
-		while (true) {
-			PageSet<? extends StorageMetadata> pageSet = list(container, options);
-			for (StorageMetadata sm : pageSet) {
-				if (!sm.getName().endsWith("-stub")) {
-					continue;
-				}
-				String uploadId = sm.getName().substring(MULTIPART_PREFIX.length(),
-						MULTIPART_PREFIX.length() + uuidLength);
-				String blobName = sm.getName().substring(MULTIPART_PREFIX.length() + uuidLength + 1);
-				int index = blobName.lastIndexOf('-');
-				blobName = blobName.substring(0, index);
 
-				mpus.add(MultipartUpload.create(container, blobName, uploadId, null, null));
-			}
-			if (pageSet.isEmpty() || pageSet.getNextMarker() == null) {
-				break;
-			}
-			options.afterMarker(pageSet.getNextMarker());
+		final List<MultipartUpload> result = new ArrayList<>(this.currentMultipartUploads.values().stream()
+				.filter(v -> v.containerName().equals(container)).collect(Collectors.toList()));
+		if (result.size() > 0) {
+			logger.debug("Found active multipart uploads for container %s: %s", container, result);
 		}
 
-		return mpus.build();
+		return result;
 	}
 
 	@Override
@@ -1329,43 +1277,5 @@ public final class PCloudBlobStore implements BlobStore {
 	@Override
 	public InputStream streamBlob(String container, String name, ExecutorService executor) {
 		return this.streamBlob(container, name);
-	}
-
-	private static final class MultiBlobInputStream extends InputStream {
-		private final Iterator<Blob> blobs;
-		private InputStream current;
-
-		MultiBlobInputStream(List<Blob> blobs) {
-			this.blobs = blobs.iterator();
-		}
-
-		@Override
-		public int read() throws IOException {
-			byte[] b = new byte[1];
-			int result = read(b, 0, b.length);
-			if (result == -1) {
-				return -1;
-			}
-			return b[0] & 0x000000FF;
-		}
-
-		@Override
-		public int read(byte[] b, int off, int len) throws IOException {
-			while (true) {
-				if (current == null) {
-					if (!blobs.hasNext()) {
-						return -1;
-					}
-					current = blobs.next().getPayload().openStream();
-				}
-				int result = current.read(b, off, len);
-				if (result == -1) {
-					current.close();
-					current = null;
-					continue;
-				}
-				return result;
-			}
-		}
 	}
 }
