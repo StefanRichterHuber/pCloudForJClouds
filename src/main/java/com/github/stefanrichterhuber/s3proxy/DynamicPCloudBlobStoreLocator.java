@@ -54,7 +54,7 @@ public class DynamicPCloudBlobStoreLocator implements BlobStoreLocator {
 			final BlobStoreContext context = ContextBuilder.newBuilder("pcloud").overrides(properties)
 					.build(BlobStoreContext.class);
 			final BlobStore blobStore = context.getBlobStore();
-			return Maps.immutableEntry(identity, blobStore);
+			return Maps.immutableEntry(id, blobStore);
 		});
 		return result;
 	}
