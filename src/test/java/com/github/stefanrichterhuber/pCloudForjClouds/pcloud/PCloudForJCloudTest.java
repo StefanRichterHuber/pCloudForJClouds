@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
@@ -25,6 +26,7 @@ import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
 import org.jclouds.blobstore.options.CopyOptions;
 import org.jclouds.blobstore.options.GetOptions;
+import org.jclouds.blobstore.options.ListContainerOptions;
 import org.jclouds.io.Payloads;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -353,7 +355,7 @@ public class PCloudForJCloudTest {
 		// Get content and check if it matches
 		Thread.sleep(TIME_TO_WAIT);
 		Blob blob = blobStore.getBlob(container, blobName);
-		
+
 		assertEquals(etag, blob.getMetadata().getETag());
 		String resultContent = IOUtils.toString(blob.getPayload().openStream(), StandardCharsets.UTF_8.name());
 		assertEquals(mergedContent, resultContent);
@@ -404,6 +406,132 @@ public class PCloudForJCloudTest {
 		assertEquals(etag, blob.getMetadata().getETag());
 		String resultContent = IOUtils.toString(blob.getPayload().openStream(), StandardCharsets.UTF_8.name());
 		assertEquals(mergedContent, resultContent);
+
+		blobStore.deleteContainer(container);
+	}
+
+	@Test
+	public void shouldListMetadataRecursivly() throws InterruptedException {
+
+		BlobStore blobStore = getBlobStore();
+		String container = UUID.randomUUID().toString();
+
+		LOGGER.info("Uploading to container {}", container);
+
+		blobStore.createContainerInLocation(null, container);
+		Thread.sleep(TIME_TO_WAIT);
+		assertTrue(blobStore.containerExists(container));
+
+		String blobName1 = UUID.randomUUID().toString() + ".txt";
+		String blobName2 = "pre-" + UUID.randomUUID().toString() + ".txt";
+
+		String blobName3 = "rnd/" + UUID.randomUUID().toString() + ".txt";
+		String blobName4 = "rnd/" + "pre-" + UUID.randomUUID().toString() + ".txt";
+
+		for (String name : Arrays.asList(blobName1, blobName2, blobName3, blobName4)) {
+			Blob blob = blobStore.blobBuilder(name)//
+					.payload(name) //
+					.build();
+
+			blobStore.putBlob(container, blob);
+		}
+
+		/*
+		 * Should list only the files directly in the container
+		 */
+		{
+			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container, ListContainerOptions.NONE);
+			assertEquals(2, pageSet.size());
+			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
+			assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2)));
+		}
+
+		/*
+		 * Should list only the files directly in the container with the prefix
+		 */
+		{
+			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
+					ListContainerOptions.Builder.prefix("pre-"));
+			assertEquals(1, pageSet.size());
+			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
+			assertTrue(names.containsAll(Arrays.asList(blobName2)));
+		}
+
+		/*
+		 * Should list all files since recursive
+		 */
+		{
+			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
+					ListContainerOptions.Builder.recursive());
+			assertEquals(4, pageSet.size());
+			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
+			assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2, blobName3.substring("rnd/".length()), blobName4.substring("rnd/".length()))));
+		}
+
+		/*
+		 * Should list all files with prefix since recursive
+		 */
+		{
+			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
+					ListContainerOptions.Builder.recursive().prefix("pre-"));
+			assertEquals(2, pageSet.size());
+			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
+			assertTrue(names.containsAll(Arrays.asList(blobName2, blobName4.substring("rnd/".length()))));
+		}
+
+		blobStore.deleteContainer(container);
+
+	}
+
+	@Test
+	public void shouldListMetadata() throws InterruptedException {
+		final int TEST_FILES = 10;
+
+		BlobStore blobStore = getBlobStore();
+		String container = UUID.randomUUID().toString();
+
+		LOGGER.info("Uploading to container {}", container);
+
+		blobStore.createContainerInLocation(null, container);
+		Thread.sleep(TIME_TO_WAIT);
+		assertTrue(blobStore.containerExists(container));
+
+		List<String> contents = new ArrayList<>();
+		List<String> blobNames = new ArrayList<>();
+		List<String> etags = new ArrayList<>();
+		for (int i = 0; i < TEST_FILES; i++) {
+			contents.add(UUID.randomUUID().toString());
+			blobNames.add((i % 2 == 0 ? "pre-" : "") + UUID.randomUUID().toString() + ".txt");
+
+			Blob blob = blobStore.blobBuilder(blobNames.get(i))//
+					.payload(contents.get(i)) //
+					.build();
+
+			etags.add(blobStore.putBlob(container, blob));
+		}
+
+		/*
+		 * Should list all files
+		 */
+		{
+			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container, ListContainerOptions.NONE);
+			assertEquals(TEST_FILES, pageSet.size());
+			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
+			assertTrue(names.containsAll(blobNames));
+		}
+
+		/*
+		 * Should list all files with prefix pre-
+		 */
+		{
+			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
+					ListContainerOptions.Builder.prefix("pre-"));
+			assertEquals(TEST_FILES / 2, pageSet.size());
+			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
+			List<String> preFixBlobNames = blobNames.stream().filter(f -> f.startsWith("pre-"))
+					.collect(Collectors.toList());
+			assertTrue(names.containsAll(preFixBlobNames));
+		}
 
 		blobStore.deleteContainer(container);
 	}

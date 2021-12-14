@@ -204,7 +204,7 @@ public final class PCloudBlobStore implements BlobStore {
 		this.pCloudContainerNameValidator.validate(container);
 		if (!this.containerExists(container)) {
 			logger.warn("Container %s does not exist", container);
-			throw new ContainerNotFoundException(container, String.format("Container %s not found in %s",
+			throw new ContainerNotFoundException(container, String.format("Container %s not found in %s", container,
 					this.getAllContainerNames().stream().collect(Collectors.joining(", "))));
 		}
 	}
@@ -474,7 +474,7 @@ public final class PCloudBlobStore implements BlobStore {
 			final PCloudError pCloudError = PCloudError.parse(e);
 			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
 					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Container {} not found: {}", container, pCloudError.getCode());
+				logger.debug("Container %s not found: %s", container, pCloudError.getCode());
 				return null;
 			}
 			throw new PCloudBlobStoreException(e);
@@ -646,7 +646,7 @@ public final class PCloudBlobStore implements BlobStore {
 			final PCloudError pCloudError = PCloudError.parse(e);
 			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
 					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Container {} not found: {}", container, pCloudError.getCode());
+				logger.debug("Container %s not found: %s", container, pCloudError.getCode());
 				return false;
 			}
 			throw new PCloudBlobStoreException(e);
@@ -709,11 +709,11 @@ public final class PCloudBlobStore implements BlobStore {
 
 		try {
 			// Loading blobs from container
-			RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(containerName)).execute();
+			RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(containerName), options.isRecursive()).execute();
 			SortedSet<StorageMetadata> contents = collectStorageMetadata(containerName, remoteFolder, options);
 
 			String marker = null;
-			if (options != null) {
+			if (options != null && options != ListContainerOptions.NONE) {
 				if (options.getMarker() != null) {
 					final String finalMarker = options.getMarker();
 					Optional<StorageMetadata> lastMarkerMetadata = tryFind(contents, new Predicate<StorageMetadata>() {
@@ -853,7 +853,7 @@ public final class PCloudBlobStore implements BlobStore {
 			final PCloudError pCloudError = PCloudError.parse(e);
 			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
 					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Blob {}/{} not found: {}", container, key, pCloudError.getCode());
+				logger.debug("Blob %s/%s not found: %s", container, key, pCloudError.getCode());
 				return false;
 			}
 			throw new PCloudBlobStoreException(e);
@@ -872,6 +872,7 @@ public final class PCloudBlobStore implements BlobStore {
 		assertContainerExists(container);
 		this.pCloudBlobKeyValidator.validate(blob.getMetadata().getName());
 
+		logger.debug("Uploading blob %s to container %s", container, blob);
 		try {
 			if (getDirectoryBlobSuffix(blob.getMetadata().getName()) != null) {
 				return putDirectoryBlob(container, blob);
@@ -1069,11 +1070,11 @@ public final class PCloudBlobStore implements BlobStore {
 		} catch (ApiError e) {
 			final PCloudError pCloudError = PCloudError.parse(e);
 			if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Blob {}/{} not found: {}", container, name, pCloudError.getCode());
+				logger.debug("Blob %s/%s not found: %s", container, name, pCloudError.getCode());
 				return null;
 			}
 			if (pCloudError == PCloudError.PARENT_DIR_DOES_NOT_EXISTS) {
-				logger.warn("Parent folder of blob {}/{} does not exist", container, name);
+				logger.warn("Parent folder of blob %s/%s does not exist", container, name);
 				return null;
 			}
 			throw new PCloudBlobStoreException(e);
