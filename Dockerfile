@@ -1,4 +1,4 @@
-FROM adoptopenjdk/openjdk8
+FROM openjdk:17-alpine
 
 RUN mkdir /opt/app && mkdir /opt/app/libs
 
