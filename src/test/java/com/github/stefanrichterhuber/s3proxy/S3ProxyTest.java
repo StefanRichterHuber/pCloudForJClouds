@@ -134,9 +134,9 @@ public class S3ProxyTest {
 			partEtags.add(part.getPartETag());
 		}
 
-		s3Client.completeMultipartUpload(new CompleteMultipartUploadRequest()
-				.withUploadId(initiateMultipartUpload.getUploadId()).withBucketName(bucket).withKey("final")
-				.withPartETags(partEtags));
+		s3Client.completeMultipartUpload(
+				new CompleteMultipartUploadRequest().withUploadId(initiateMultipartUpload.getUploadId())
+						.withBucketName(bucket).withKey("final").withPartETags(partEtags));
 
 		// Download and check
 		S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));

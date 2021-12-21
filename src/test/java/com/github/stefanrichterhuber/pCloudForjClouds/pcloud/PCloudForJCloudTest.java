@@ -465,7 +465,7 @@ public class PCloudForJCloudTest {
 					ListContainerOptions.Builder.recursive());
 			assertEquals(4, pageSet.size());
 			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-			assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2, blobName3.substring("rnd/".length()), blobName4.substring("rnd/".length()))));
+			assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2, blobName3, blobName4)));
 		}
 
 		/*
@@ -476,7 +476,7 @@ public class PCloudForJCloudTest {
 					ListContainerOptions.Builder.recursive().prefix("pre-"));
 			assertEquals(2, pageSet.size());
 			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-			assertTrue(names.containsAll(Arrays.asList(blobName2, blobName4.substring("rnd/".length()))));
+			assertTrue(names.containsAll(Arrays.asList(blobName2, blobName4)));
 		}
 
 		blobStore.deleteContainer(container);

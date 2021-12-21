@@ -344,16 +344,21 @@ public final class PCloudBlobStore implements BlobStore {
 	 * @param options      {@link ListContainerOptions} to apply
 	 * @return
 	 */
-	private SortedSet<StorageMetadata> collectStorageMetadata(String container, final RemoteFolder remoteFolder,
-			ListContainerOptions options) {
+	private SortedSet<StorageMetadata> collectStorageMetadata(String container, String parentFolder,
+			final RemoteFolder remoteFolder, ListContainerOptions options) {
 		final SortedSet<StorageMetadata> result = new TreeSet<>();
 		for (RemoteEntry entry : remoteFolder.children()) {
 			if (matchesOptions(entry, options)) {
+				final String key = parentFolder != null ? parentFolder + entry.name() : entry.name();
 				if (entry.isFile()) {
-					Blob blob = this.createBlobFromRemoteFile(container, entry.asFile());
+					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile());
 					result.add(blob.getMetadata());
 				} else if (entry.isFolder()) {
-					result.addAll(this.collectStorageMetadata(container, entry.asFolder(), options));
+					if (options != null && options.getPrefix() != null && entry.name().startsWith(options.getPrefix())) {
+						final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder());
+						result.add(blob.getMetadata());
+					}
+					result.addAll(this.collectStorageMetadata(container, key + SEPARATOR, entry.asFolder(), options));
 				}
 			}
 		}
@@ -535,20 +540,52 @@ public final class PCloudBlobStore implements BlobStore {
 	 * @param remoteFile {@link RemoteFile}.
 	 * @return {@link Blob} created
 	 */
-	private Blob createBlobFromRemoteFile(String container, final RemoteFile remoteFile) {
+	private Blob createBlobFromRemoteEntry(String container, String key, final RemoteFile remoteFile) {
+		if (remoteFile.isFolder()) {
+			return createBlobFromRemoteEntry(container, key, remoteFile.asFolder());
+		}
+
 		final Map<String, String> userMetadata = new HashMap<>();
 		userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
 
-		final Payload payload = remoteFile.size() == 0 || remoteFile.isFolder() ? new EmptyPayload()
-				: new RemoteFilePayload(remoteFile);
+		final Payload payload = remoteFile.size() == 0 ? new EmptyPayload() : new RemoteFilePayload(remoteFile);
 		final Blob blob = this.blobBuilders.get() //
 				.payload(payload) //
 				.contentType(remoteFile.contentType()) //
 				.contentLength(remoteFile.size()) //
 				.eTag(remoteFile.hash()) //
-				.name(remoteFile.name()) //
+				.name(key) //
 				.userMetadata(userMetadata) //
-				.type(remoteFile.isFolder() ? StorageType.FOLDER : StorageType.BLOB) //
+				.type(StorageType.BLOB) //
+				.build();
+		blob.getMetadata().setLastModified(remoteFile.lastModified());
+		blob.getMetadata().setCreationDate(remoteFile.created());
+		blob.getMetadata().setId(remoteFile.id());
+		blob.getMetadata().setContainer(container);
+		return blob;
+	}
+
+	/**
+	 * This utility method creates a {@link Blob} from a {@link RemoteFolder}.
+	 * 
+	 * @param container  Host container of the file
+	 * @param remoteFile {@link RemoteFolder}.
+	 * @return {@link Blob} created
+	 */
+	private Blob createBlobFromRemoteEntry(String container, String key, final RemoteFolder remoteFile) {
+		if (remoteFile.isFile()) {
+			return createBlobFromRemoteEntry(container, key, remoteFile.asFile());
+		}
+		final Map<String, String> userMetadata = new HashMap<>();
+		userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
+
+		final Payload payload = new EmptyPayload();
+		final Blob blob = this.blobBuilders.get() //
+				.payload(payload) //
+				.eTag(base16().lowerCase().encode(DIRECTORY_MD5)) //
+				.name(key.endsWith(SEPARATOR) ? key : key + SEPARATOR) //
+				.userMetadata(userMetadata) //
+				.type(StorageType.FOLDER) //
 				.build();
 		blob.getMetadata().setLastModified(remoteFile.lastModified());
 		blob.getMetadata().setCreationDate(remoteFile.created());
@@ -709,8 +746,9 @@ public final class PCloudBlobStore implements BlobStore {
 
 		try {
 			// Loading blobs from container
-			RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(containerName), options.isRecursive()).execute();
-			SortedSet<StorageMetadata> contents = collectStorageMetadata(containerName, remoteFolder, options);
+			RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(containerName), options.isRecursive())
+					.execute();
+			SortedSet<StorageMetadata> contents = collectStorageMetadata(containerName, null, remoteFolder, options);
 
 			String marker = null;
 			if (options != null && options != ListContainerOptions.NONE) {
@@ -887,7 +925,7 @@ public final class PCloudBlobStore implements BlobStore {
 
 			final DataSource ds = dataSourceFromBlob(blob);
 			final Call<RemoteFile> createdFile = this.getApiClient().createFile(targetFolder, name, ds,
-					UploadOptions.OVERRIDE_FILE);
+					blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE);
 			RemoteFile remoteFile = createdFile.execute();
 			return remoteFile.hash();
 		} catch (IOException | ApiError e) {
@@ -984,7 +1022,7 @@ public final class PCloudBlobStore implements BlobStore {
 		assertContainerExists(container);
 		try {
 			final RemoteFile remoteFile = this.getApiClient().loadFile(createPath(container, name)).execute();
-			final Blob blob = createBlobFromRemoteFile(container, remoteFile);
+			final Blob blob = createBlobFromRemoteEntry(container, name, remoteFile);
 
 			if (options != null && options != GetOptions.NONE) {
 				final String eTag = maybeQuoteETag(remoteFile.hash());
