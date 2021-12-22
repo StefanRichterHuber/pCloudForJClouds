@@ -17,6 +17,7 @@ import org.apache.commons.io.IOUtils;
 import org.eclipse.jetty.util.component.AbstractLifeCycle;
 import org.gaul.s3proxy.AuthenticationType;
 import org.gaul.s3proxy.S3Proxy;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -45,6 +46,8 @@ public class S3ProxyTest {
 	private final static Logger LOGGER = LoggerFactory.getLogger(S3ProxyTest.class);
 
 	private AmazonS3 s3Client;
+	
+	private S3Proxy s3Proxy;
 
 	private static final List<String> CONTENT_LINES = Arrays.asList("O rose, thou art sick!\r\n",
 			"The invisible worm,\r\n", "That flies in the night,\r\n", "In the howling storm.\r\n",
@@ -63,7 +66,7 @@ public class S3ProxyTest {
 		System.setProperty("com.amazonaws.services.s3.disablePutObjectMD5Validation", "true");
 		System.setProperty("com.amazonaws.services.s3.disableGetObjectMD5Validation", "true");
 
-		S3Proxy s3Proxy = S3Proxy.builder() //
+		s3Proxy = S3Proxy.builder() //
 				.endpoint(URI.create("http://127.0.0.1:8080")) //
 				.awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "access", "secret") //
 				.build();
@@ -84,6 +87,12 @@ public class S3ProxyTest {
 						Regions.US_EAST_1.getName()))
 				.build();
 
+	}
+	
+	@After
+	public void close() throws Exception {
+		this.s3Client.shutdown();
+		this.s3Proxy.stop();
 	}
 
 	@Test
