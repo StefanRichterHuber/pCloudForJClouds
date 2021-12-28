@@ -1,4 +1,4 @@
-package com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal;
+package com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal;
 
 import com.pcloud.sdk.ApiError;
 

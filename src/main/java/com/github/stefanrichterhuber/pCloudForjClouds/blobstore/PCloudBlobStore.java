@@ -68,14 +68,14 @@ import org.jclouds.logging.Logger;
 
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.AbstractBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.BlobDataSource;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.EmptyPayload;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudBlobStoreException;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudError;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudMultipartUpload;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.RemoteFilePayload;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudBlobKeyValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudContainerNameValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
-import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.EmptyPayload;
-import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.PCloudBlobStoreException;
-import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.PCloudError;
-import com.github.stefanrichterhuber.pCloudForjClouds.strategy.internal.RemoteFilePayload;
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
 import com.google.common.base.Predicate;
