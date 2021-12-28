@@ -45,6 +45,7 @@ import org.jclouds.blobstore.domain.MutableStorageMetadata;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
 import org.jclouds.blobstore.domain.StorageType;
+import org.jclouds.blobstore.domain.Tier;
 import org.jclouds.blobstore.domain.internal.MutableStorageMetadataImpl;
 import org.jclouds.blobstore.domain.internal.PageSetImpl;
 import org.jclouds.blobstore.options.CopyOptions;
@@ -594,14 +595,14 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	 * @return {@link Blob} created
 	 */
 	private Blob createBlobFromRemoteEntry(String container, String key, RemoteEntry remoteFile) {
+		Blob blob = null;
+		final Map<String, String> userMetadata = new HashMap<>();
+		userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
+
 		if (remoteFile instanceof RemoteFile && remoteFile.isFile()) {
 			final RemoteFile file = (RemoteFile) remoteFile;
-
-			final Map<String, String> userMetadata = new HashMap<>();
-			userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
-
 			final Payload payload = file.size() == 0 ? new EmptyPayload() : new RemoteFilePayload(file);
-			final Blob blob = this.blobBuilders.get() //
+			blob = this.blobBuilders.get() //
 					.payload(payload) //
 					.contentType(file.contentType()) //
 					.contentLength(file.size()) //
@@ -610,34 +611,31 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 					.userMetadata(userMetadata) //
 					.type(StorageType.BLOB) //
 					.build();
-			blob.getMetadata().setLastModified(remoteFile.lastModified());
-			blob.getMetadata().setCreationDate(remoteFile.created());
-			blob.getMetadata().setId(remoteFile.id());
-			blob.getMetadata().setContainer(container);
-			return blob;
+			blob.getMetadata().setSize(file.size());
 		} else {
 			// Add entry to cache
 			if (remoteFile instanceof RemoteFolder) {
 				this.remoteFolderCache.put(key, (RemoteFolder) remoteFile);
 			}
 
-			final Map<String, String> userMetadata = new HashMap<>();
-			userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
-
 			final Payload payload = new EmptyPayload();
-			final Blob blob = this.blobBuilders.get() //
+			blob = this.blobBuilders.get() //
 					.payload(payload) //
+					.contentLength(0l) //
 					.eTag(base16().lowerCase().encode(DIRECTORY_MD5)) //
 					.name(key.endsWith(SEPARATOR) ? key : key + SEPARATOR) //
 					.userMetadata(userMetadata) //
 					.type(remoteFile.isFolder() ? StorageType.FOLDER : StorageType.BLOB) //
 					.build();
-			blob.getMetadata().setLastModified(remoteFile.lastModified());
-			blob.getMetadata().setCreationDate(remoteFile.created());
-			blob.getMetadata().setId(remoteFile.id());
-			blob.getMetadata().setContainer(container);
-			return blob;
+			blob.getMetadata().setSize(0l);
 		}
+		blob.getMetadata().setLastModified(remoteFile.lastModified());
+		blob.getMetadata().setCreationDate(remoteFile.created());
+		blob.getMetadata().setId(remoteFile.id());
+		blob.getMetadata().setContainer(container);
+		blob.getMetadata().setTier(Tier.STANDARD);
+		blob.getMetadata().setLocation(this.defaultLocation.get());
+		return blob;
 	}
 
 	/**
