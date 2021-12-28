@@ -698,21 +698,8 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	@Override
 	public boolean containerExists(String container) {
 		this.pCloudContainerNameValidator.validate(container);
-		try {
-			final String path = createPath(container);
-			RemoteFolder remoteFolder = this.getApiClient().listFolder(path).execute();
-			return remoteFolder.isFolder();
-		} catch (ApiError e) {
-			final PCloudError pCloudError = PCloudError.parse(e);
-			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
-					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Container %s not found: %s", container, pCloudError.getCode());
-				return false;
-			}
-			throw new PCloudBlobStoreException(e);
-		} catch (IOException e) {
-			throw new PCloudBlobStoreException(e);
-		}
+		RemoteFolder remoteFolder = this.remoteFolderCache.compute(container, this::checkOrFetchFolder);
+		return remoteFolder != null;
 	}
 
 	@Override

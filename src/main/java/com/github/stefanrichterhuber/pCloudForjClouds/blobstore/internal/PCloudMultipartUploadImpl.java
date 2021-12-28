@@ -32,10 +32,12 @@ import com.pcloud.sdk.DataSource;
 import com.pcloud.sdk.RemoteFile;
 
 public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
+	private static final int BUFFER_SIZE = 1 * 1024 * 1024; // 1MB
 	private static final Logger LOGGER = LoggerFactory.getLogger(PCloudMultipartUploadImpl.class);
 	private static final String MULTIPART_PREFIX = ".mpus-";
 
 	private static final byte[] EMPTY_CONTENT = new byte[0];
+	@SuppressWarnings("deprecation")
 	private static final byte[] EMPTY_CONTENT_MD5 = Hashing.md5().hashBytes(EMPTY_CONTENT).asBytes();
 	private static final String PART_ETAG = base16().lowerCase().encode(EMPTY_CONTENT_MD5);
 
@@ -55,7 +57,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
 	 * Creates a new {@link PCloudMultipartUpload}
 	 * 
 	 * @param folderId      Parent folder id containing the file to upload
-	 * @param containerName Container containg the file to upload
+	 * @param containerName Container containing the file to upload
 	 * @param blobName      Name of the file
 	 * @param id            ID of the multipart upload
 	 * @param blobMetadata  Metadata of the target upload
@@ -106,33 +108,25 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
 		LOGGER.debug("Received part {} for multipart upload {}", partNumber, id());
 		// First we try to directly write to the file
 		boolean written = false;
-		/*
-		 * If the payload is small, its too inefficient to start a remote file
-		 * interaction -> just queue it and send it with the next file interaction
-		 */
-		if (payload.getContentMetadata().getContentLength() > 8_000 || queue.size() > 10) {
-			if (writeLock.tryLock()) {
-				try {
-					try (PCloudFileDescriptor fd = fileOps.open(temporaryFileId, Flag.APPEND);
-							OutputStream target = fd.openStream();
-							BufferedOutputStream bos = new BufferedOutputStream(target, 10 * 8_000)) {
-						// Are there any previous parts of the queue to write?
-						this.writeQueue(bos);
-						// Then check if this part is next in the queue
-						if (partNumber == currentPartId + 1) {
-							currentPartId++;
-							try (InputStream src = payload.openStream()) {
-								IOUtils.copyLarge(src, bos);
-							}
-							written = true;
-							LOGGER.debug("Directly uploaded part {} for multipart upload {}", partNumber, id());
-						}
-						// Are there any next parts waiting in the queue to be written?
-						this.writeQueue(bos);
+		if (writeLock.tryLock()) {
+			try (PCloudFileDescriptor fd = fileOps.open(temporaryFileId, Flag.APPEND);
+					OutputStream target = fd.openStream();
+					BufferedOutputStream bos = new BufferedOutputStream(target, BUFFER_SIZE)) {
+				// Are there any previous parts of the queue to write?
+				this.writeQueue(bos);
+				// Then check if this part is next in the queue
+				if (partNumber == currentPartId + 1) {
+					currentPartId++;
+					try (InputStream src = payload.openStream()) {
+						IOUtils.copyLarge(src, bos);
 					}
-				} finally {
-					writeLock.unlock();
+					written = true;
+					LOGGER.debug("Directly uploaded part {} for multipart upload {}", partNumber, id());
 				}
+				// Are there any next parts waiting in the queue to be written?
+				this.writeQueue(bos);
+			} finally {
+				writeLock.unlock();
 			}
 		}
 		if (!written) {
