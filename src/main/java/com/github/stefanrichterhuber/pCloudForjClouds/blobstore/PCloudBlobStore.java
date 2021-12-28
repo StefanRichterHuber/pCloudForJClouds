@@ -351,11 +351,11 @@ public final class PCloudBlobStore implements BlobStore {
 			try {
 				RemoteFolder remoteFolder = this.apiClient.loadFolder(v.folderId()).execute();
 				if (remoteFolder != null) {
-					this.logger.info("Parent folder %s with id %d exists in cache and remote.", dir, v.folderId());
+					this.logger.debug("Parent folder %s with id %d exists in cache and remote.", dir, v.folderId());
 					return remoteFolder;
 				}
 			} catch (IOException | ApiError e) {
-				this.logger.info("Parent folder %s with id %d exists in cache but not remote!", dir, v.folderId());
+				this.logger.debug("Parent folder %s with id %d exists in cache but not remote!", dir, v.folderId());
 				// Folder does not exist anymore
 				return null;
 			}
@@ -363,10 +363,10 @@ public final class PCloudBlobStore implements BlobStore {
 		// Folder not in cache, check if present remote
 		try {
 			RemoteFolder remoteFolder = this.apiClient.listFolder(this.createPath(dir)).execute();
-			this.logger.info("Parent folder %s exists only remote, but not yet in cache.", dir);
+			this.logger.debug("Parent folder %s exists only remote, but not yet in cache.", dir);
 			return remoteFolder;
 		} catch (IOException | ApiError e) {
-			this.logger.info("Parent folder %s does not exist.", dir);
+			this.logger.debug("Parent folder %s does not exist.", dir);
 			// Folder does not exist remote
 			return null;
 		}

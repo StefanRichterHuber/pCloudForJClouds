@@ -37,7 +37,7 @@ public class Main implements Callable<Integer> {
 		 */
 		ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
 				.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
-		root.setLevel(verbose ? Level.DEBUG : Level.WARN);
+		root.setLevel(verbose ? Level.DEBUG : Level.INFO);
 
 		/*
 		 * Configure S3 Proxy
