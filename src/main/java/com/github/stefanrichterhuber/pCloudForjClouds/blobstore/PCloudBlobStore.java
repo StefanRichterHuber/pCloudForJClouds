@@ -113,6 +113,7 @@ public final class PCloudBlobStore implements BlobStore {
 
 	private static final String SEPARATOR = "/";
 	private static final byte[] EMPTY_CONTENT = new byte[0];
+	@SuppressWarnings("deprecation")
 	private static final byte[] DIRECTORY_MD5 = Hashing.md5().hashBytes(EMPTY_CONTENT).asBytes();
 
 	@Resource
