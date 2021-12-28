@@ -1,6 +1,8 @@
 package com.github.stefanrichterhuber.s3proxy;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -33,10 +35,13 @@ import com.amazonaws.services.s3.model.CompleteMultipartUploadRequest;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.InitiateMultipartUploadRequest;
 import com.amazonaws.services.s3.model.InitiateMultipartUploadResult;
+import com.amazonaws.services.s3.model.ListObjectsRequest;
+import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.PartETag;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.services.s3.model.UploadPartRequest;
 import com.amazonaws.services.s3.model.UploadPartResult;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
@@ -93,6 +98,43 @@ public class S3ProxyTest {
 	public void close() throws Exception {
 		this.s3Client.shutdown();
 		this.s3Proxy.stop();
+	}
+	
+	@Test
+	public void shouldList() {
+		String bucket = UUID.randomUUID().toString();
+
+		s3Client.createBucket(bucket);
+		
+		for(char i = 'a'; i<='j'; i++) {
+			ObjectMetadata om = new ObjectMetadata();
+			om.setContentLength(CONTENT_BYTES.length);
+			String key = i + "blob";
+			s3Client.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(CONTENT_BYTES), om));
+		}
+		
+		
+		ObjectListing objectListing1 = s3Client.listObjects(new ListObjectsRequest().withBucketName(bucket).withMaxKeys(5));
+		List<S3ObjectSummary> objectSummaries1 = objectListing1.getObjectSummaries();
+		assertFalse(objectSummaries1.isEmpty());
+		assertEquals(5, objectSummaries1.size());
+		assertNotNull(objectListing1.getNextMarker());
+		
+		
+		ObjectListing objectListing2 = s3Client.listObjects(new ListObjectsRequest().withBucketName(bucket).withMaxKeys(5).withMarker(objectListing1.getNextMarker()));
+		List<S3ObjectSummary> objectSummaries2 = objectListing2.getObjectSummaries();
+		assertFalse(objectSummaries2.isEmpty());
+		assertEquals(5, objectSummaries2.size());
+		
+		// Check if there are no overlaps
+		List<String> r1 = objectSummaries1.stream().map(os -> os.getKey()).collect(Collectors.toList());
+		List<String> r2 = objectSummaries2.stream().map(os -> os.getKey()).collect(Collectors.toList());
+		
+		for(String r: r1) {
+			assertFalse(r2.contains(r));
+		}
+		
+		s3Client.deleteBucket(bucket);
 	}
 
 	@Test
