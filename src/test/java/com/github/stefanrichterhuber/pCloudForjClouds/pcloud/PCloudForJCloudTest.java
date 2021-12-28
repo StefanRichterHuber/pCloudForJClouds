@@ -24,6 +24,7 @@ import org.jclouds.blobstore.domain.MultipartUpload;
 import org.jclouds.blobstore.domain.MutableBlobMetadata;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
+import org.jclouds.blobstore.domain.StorageType;
 import org.jclouds.blobstore.options.CopyOptions;
 import org.jclouds.blobstore.options.GetOptions;
 import org.jclouds.blobstore.options.ListContainerOptions;
@@ -44,10 +45,10 @@ public class PCloudForJCloudTest {
 
 	private BlobStore blobStore;
 	private String container;
-	
+
 	@Before
 	public void setup() throws InterruptedException {
-		
+
 		Properties properties = new Properties();
 		properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
 		properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, System.getenv("PCLOUD_TOKEN"));
@@ -57,12 +58,12 @@ public class PCloudForJCloudTest {
 
 		this.blobStore = context.getBlobStore();
 		this.container = UUID.randomUUID().toString();
-		
+
 		blobStore.createContainerInLocation(null, container);
 		assertTrue(blobStore.containerExists(container));
 		Thread.sleep(TIME_TO_WAIT);
 	}
-	
+
 	@After
 	public void close() {
 		blobStore.deleteContainer(container);
@@ -98,7 +99,21 @@ public class PCloudForJCloudTest {
 				.build();
 		blobStore.putBlob(container, contentBlob);
 		Thread.sleep(TIME_TO_WAIT);
-		blobStore.blobExists(container, blobName);
+		// Check the blob
+		assertTrue(blobStore.blobExists(container, blobName));
+
+		// Also check if one can fetch the parent folder
+		{
+			Blob folderBlob = blobStore.getBlob(container, "f1/f2/f3/f4/");
+			assertNotNull(folderBlob);
+			assertEquals(StorageType.FOLDER, folderBlob.getMetadata().getType());
+		}
+		// Check if folder is fetched without proper folder marker
+		{
+			Blob folderBlob = blobStore.getBlob(container, "f1/f2/f3");
+			assertNotNull(folderBlob);
+			assertEquals(StorageType.FOLDER, folderBlob.getMetadata().getType());
+		}
 
 	}
 
@@ -107,7 +122,6 @@ public class PCloudForJCloudTest {
 		String b1Name = UUID.randomUUID().toString();
 		String b2Name = UUID.randomUUID().toString();
 		String b3Name = UUID.randomUUID().toString();
-
 
 		Blob b1 = blobStore.blobBuilder(b1Name)//
 				.payload(b1Name).build();
@@ -153,7 +167,6 @@ public class PCloudForJCloudTest {
 		// Check if test content is present
 		assertTrue(blobStore.blobExists(container, folder + blobName));
 
-
 	}
 
 	@Test
@@ -161,7 +174,6 @@ public class PCloudForJCloudTest {
 		String b1Name = UUID.randomUUID().toString();
 		String b2Name = UUID.randomUUID().toString();
 		String b3Name = UUID.randomUUID().toString();
-
 
 		Blob b1 = blobStore.blobBuilder(b1Name)//
 				.payload(b1Name).build();
@@ -222,7 +234,6 @@ public class PCloudForJCloudTest {
 	public void shouldUploadAndDownloadContent() throws IOException, InterruptedException {
 		String blobName = UUID.randomUUID().toString() + ".txt";
 		String blobContent = UUID.randomUUID().toString();
-
 
 		// Blob should not exist
 		assertFalse(blobStore.blobExists(container, blobName));
@@ -367,14 +378,14 @@ public class PCloudForJCloudTest {
 	@Test
 	public void shouldListMetadataRecursivly() throws InterruptedException {
 
-
 		LOGGER.info("Uploading to container {}", container);
 
 		String blobName1 = UUID.randomUUID().toString() + ".txt";
 		String blobName2 = "pre-" + UUID.randomUUID().toString() + ".txt";
 
-		String blobName3 = "rnd/" + UUID.randomUUID().toString() + ".txt";
-		String blobName4 = "rnd/" + "pre-" + UUID.randomUUID().toString() + ".txt";
+		final String folder = "rnd/";
+		String blobName3 = folder + UUID.randomUUID().toString() + ".txt";
+		String blobName4 = folder + "pre-" + UUID.randomUUID().toString() + ".txt";
 
 		for (String name : Arrays.asList(blobName1, blobName2, blobName3, blobName4)) {
 			Blob blob = blobStore.blobBuilder(name)//
@@ -389,9 +400,9 @@ public class PCloudForJCloudTest {
 		 */
 		{
 			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container, ListContainerOptions.NONE);
-			assertEquals(2, pageSet.size());
+			assertEquals(3, pageSet.size());
 			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-			assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2)));
+			assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2, folder)));
 		}
 
 		/*
@@ -411,22 +422,21 @@ public class PCloudForJCloudTest {
 		{
 			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
 					ListContainerOptions.Builder.recursive());
-			assertEquals(4, pageSet.size());
+			assertEquals(5, pageSet.size());
 			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-			assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2, blobName3, blobName4)));
+			assertTrue(names.containsAll(Arrays.asList(folder, blobName1, blobName2, blobName3, blobName4)));
 		}
 
 		/*
-		 * Should list all files with prefix since recursive
+		 * Should list all files within the directory
 		 */
 		{
 			PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
-					ListContainerOptions.Builder.recursive().prefix("pre-"));
-			assertEquals(2, pageSet.size());
+					ListContainerOptions.Builder.recursive().prefix(folder));
+			assertEquals(3, pageSet.size());
 			List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-			assertTrue(names.containsAll(Arrays.asList(blobName2, blobName4)));
+			assertTrue(names.containsAll(Arrays.asList(folder, blobName3, blobName4)));
 		}
-
 
 	}
 
@@ -475,5 +485,4 @@ public class PCloudForJCloudTest {
 		}
 
 	}
-
 }

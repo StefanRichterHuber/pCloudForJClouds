@@ -5,11 +5,7 @@ import static com.google.common.collect.Iterables.tryFind;
 import static com.google.common.collect.Sets.newTreeSet;
 import static com.google.common.io.BaseEncoding.base16;
 
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -26,7 +22,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
 import javax.annotation.Resource;
@@ -35,7 +30,6 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.apache.commons.io.IOUtils;
 import org.jclouds.blobstore.BlobStore;
 import org.jclouds.blobstore.BlobStoreContext;
 import org.jclouds.blobstore.ContainerNotFoundException;
@@ -71,6 +65,7 @@ import org.jclouds.io.ContentMetadata;
 import org.jclouds.io.Payload;
 import org.jclouds.logging.Logger;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.AbstractBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.BlobDataSource;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudMultipartUpload;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudBlobKeyValidator;
@@ -109,7 +104,7 @@ import com.pcloud.sdk.UploadOptions;
  *
  */
 @Singleton
-public final class PCloudBlobStore implements BlobStore {
+public final class PCloudBlobStore extends AbstractBlobStore implements BlobStore {
 
 	private static final String SEPARATOR = "/";
 	private static final byte[] EMPTY_CONTENT = new byte[0];
@@ -136,8 +131,7 @@ public final class PCloudBlobStore implements BlobStore {
 	 * It is necessary to ensure the existence of the parent folder before
 	 * {@link #putBlob(String, Blob, PutOptions)} using
 	 * {@link #assureParentFolder(String)}. Since it is inefficient to fetch folders
-	 * by path, cache the folder id for each
-	 * folder accessed.
+	 * by path, cache the folder id for each folder accessed.
 	 */
 	private final Map<String, RemoteFolder> remoteFolderCache = new ConcurrentHashMap<String, RemoteFolder>();
 
@@ -466,115 +460,55 @@ public final class PCloudBlobStore implements BlobStore {
 			final RemoteFolder remoteFolder, ListContainerOptions options) {
 		final SortedSet<StorageMetadata> result = new TreeSet<>();
 		for (RemoteEntry entry : remoteFolder.children()) {
-			if (matchesOptions(entry, options)) {
-				final String key = parentFolder != null ? parentFolder + entry.name() : entry.name();
+			// Files have a key like folder1/folder2/file, folders like
+			// folder1/folder2/folder/
+			final String key = parentFolder != null ? parentFolder + entry.name()
+					: entry.name() + (entry.isFolder() ? SEPARATOR : "");
+			if (matchesOptions(key, entry, options)) {
 				if (entry.isFile()) {
 					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile());
 					result.add(blob.getMetadata());
 				} else if (entry.isFolder()) {
-					if (options != null && options.getPrefix() != null
-							&& entry.name().startsWith(options.getPrefix())) {
-						final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder());
-						result.add(blob.getMetadata());
-					}
-					result.addAll(this.collectStorageMetadata(container, key + SEPARATOR, entry.asFolder(), options));
+					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder());
+					result.add(blob.getMetadata());
 				}
 			}
+			if (options.isRecursive() && entry.isFolder()) {
+				result.addAll(this.collectStorageMetadata(container, key, entry.asFolder(), options));
+			}
+
 		}
 		return result;
-	}
-
-	/**
-	 * Checks if the given {@link RemoteFile} matches the given
-	 * {@link ListContainerOptions}.
-	 * 
-	 * @param remoteFile
-	 * @param options    {@link ListContainerOptions} to check {@link RemoteFile}
-	 *                   against.
-	 * @return
-	 */
-	@SuppressWarnings("deprecation")
-	private boolean matchesOptions(RemoteFile remoteFile, ListContainerOptions options) {
-		if (options == null || options == ListContainerOptions.NONE) {
-			return true;
-		}
-		if (options.getPrefix() != null && !remoteFile.name().startsWith(options.getPrefix())) {
-			return false;
-		}
-		if (options.getDelimiter() != null) {
-			this.logger.debug("ListContainerOption 'delimiter' not supported");
-		}
-		if (options.getDir() != null) {
-			this.logger.debug("ListContainerOption 'dir' not supported");
-		}
-		return true;
-	}
-
-	/**
-	 * Checks if the given {@link RemoteFolder} matches the given
-	 * {@link ListContainerOptions}.
-	 * 
-	 * @param remoteFolder
-	 * @param options      {@link ListContainerOptions} to check
-	 *                     {@link RemoteFolder} against.
-	 * @return
-	 */
-	@SuppressWarnings("deprecation")
-	private boolean matchesOptions(RemoteFolder remoteFolder, ListContainerOptions options) {
-		if (options == null || options == ListContainerOptions.NONE) {
-			return true;
-		}
-		if (!options.isRecursive()) {
-			return false;
-		}
-		if (options.getDelimiter() != null) {
-			this.logger.debug("ListContainerOption 'delimiter' not supported");
-		}
-		if (options.getDir() != null) {
-			this.logger.debug("ListContainerOption 'dir' not supported");
-		}
-		return true;
 	}
 
 	/**
 	 * Checks if the given {@link RemoteEntry} matches the given
 	 * {@link ListContainerOptions}.
 	 * 
-	 * @param remoteEntry
+	 * @param remoteEntry {@link RemoteEntry} to match
+	 * @param key         Key of the {@link RemoteEntry} to match.
 	 * @param options     {@link ListContainerOptions} to check {@link RemoteEntry}
 	 *                    against.
 	 * @return
 	 */
-	private boolean matchesOptions(RemoteEntry remoteEntry, ListContainerOptions options) {
+	@SuppressWarnings("deprecation")
+	private boolean matchesOptions(String key, RemoteEntry remoteEntry, ListContainerOptions options) {
 		if (options == null || options == ListContainerOptions.NONE) {
 			return true;
 		}
-		if (remoteEntry.isFile()) {
-			return matchesOptions(remoteEntry.asFile(), options);
-		} else if (remoteEntry.isFolder()) {
-			return matchesOptions(remoteEntry.asFolder(), options);
+		if (options.getPrefix() != null && !key.startsWith(options.getPrefix())) {
+			return false;
+		}
+		if (remoteEntry.isFolder() && !options.isRecursive()) {
+			return false;
+		}
+		if (options.getDelimiter() != null) {
+			this.logger.warn("ListContainerOption 'delimiter' not supported");
+		}
+		if (options.getDir() != null) {
+			this.logger.warn("ListContainerOption 'dir' not supported");
 		}
 		return true;
-	}
-
-	/**
-	 * Utility method to clear all folders in the given {@link RemoteFolder}
-	 * 
-	 * @param folder  RemoteFolder to clear
-	 * @param options {@link ListContainerOptions} to apply
-	 * @throws IOException
-	 */
-	private void clearRemoteFolder(RemoteFolder folder, ListContainerOptions options) throws IOException {
-		for (RemoteEntry child : folder.children()) {
-			if (matchesOptions(child, options)) {
-				if (child.isFile()) {
-					child.delete();
-				}
-				if (child.isFolder()) {
-					clearRemoteFolder(child.asFolder(), options);
-				}
-			}
-		}
 	}
 
 	private StorageMetadata getContainerMetadata(String container) {
@@ -659,82 +593,51 @@ public final class PCloudBlobStore implements BlobStore {
 	 * @param remoteFile {@link RemoteFile}.
 	 * @return {@link Blob} created
 	 */
-	private Blob createBlobFromRemoteEntry(String container, String key, final RemoteFile remoteFile) {
-		if (remoteFile.isFolder()) {
-			return createBlobFromRemoteEntry(container, key, remoteFile.asFolder());
-		}
+	private Blob createBlobFromRemoteEntry(String container, String key, RemoteEntry remoteFile) {
+		if (remoteFile instanceof RemoteFile && remoteFile.isFile()) {
+			final RemoteFile file = (RemoteFile) remoteFile;
 
-		final Map<String, String> userMetadata = new HashMap<>();
-		userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
+			final Map<String, String> userMetadata = new HashMap<>();
+			userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
 
-		final Payload payload = remoteFile.size() == 0 ? new EmptyPayload() : new RemoteFilePayload(remoteFile);
-		final Blob blob = this.blobBuilders.get() //
-				.payload(payload) //
-				.contentType(remoteFile.contentType()) //
-				.contentLength(remoteFile.size()) //
-				.eTag(remoteFile.hash()) //
-				.name(key) //
-				.userMetadata(userMetadata) //
-				.type(StorageType.BLOB) //
-				.build();
-		blob.getMetadata().setLastModified(remoteFile.lastModified());
-		blob.getMetadata().setCreationDate(remoteFile.created());
-		blob.getMetadata().setId(remoteFile.id());
-		blob.getMetadata().setContainer(container);
-		return blob;
-	}
-
-	/**
-	 * This utility method creates a {@link Blob} from a {@link RemoteFolder}.
-	 * 
-	 * @param container  Host container of the file
-	 * @param remoteFile {@link RemoteFolder}.
-	 * @return {@link Blob} created
-	 */
-	private Blob createBlobFromRemoteEntry(String container, String key, final RemoteFolder remoteFile) {
-		if (remoteFile.isFile()) {
-			return createBlobFromRemoteEntry(container, key, remoteFile.asFile());
-		}
-		// Add entry to cache
-		this.remoteFolderCache.put(key, remoteFile);
-
-		final Map<String, String> userMetadata = new HashMap<>();
-		userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
-
-		final Payload payload = new EmptyPayload();
-		final Blob blob = this.blobBuilders.get() //
-				.payload(payload) //
-				.eTag(base16().lowerCase().encode(DIRECTORY_MD5)) //
-				.name(key.endsWith(SEPARATOR) ? key : key + SEPARATOR) //
-				.userMetadata(userMetadata) //
-				.type(StorageType.FOLDER) //
-				.build();
-		blob.getMetadata().setLastModified(remoteFile.lastModified());
-		blob.getMetadata().setCreationDate(remoteFile.created());
-		blob.getMetadata().setId(remoteFile.id());
-		blob.getMetadata().setContainer(container);
-		return blob;
-	}
-
-	private long countBlobs(RemoteFolder folder, ListContainerOptions options) {
-		if (folder != null) {
-			long count = 0;
-			for (RemoteEntry child : folder.children()) {
-				if (matchesOptions(child, options)) {
-					if (child.isFile()) {
-						count++;
-					}
-					if (child.isFolder()) {
-						count += countBlobs(child.asFolder(), options);
-					}
-				}
-				if (count >= options.getMaxResults()) {
-					return count;
-				}
+			final Payload payload = file.size() == 0 ? new EmptyPayload() : new RemoteFilePayload(file);
+			final Blob blob = this.blobBuilders.get() //
+					.payload(payload) //
+					.contentType(file.contentType()) //
+					.contentLength(file.size()) //
+					.eTag(file.hash()) //
+					.name(key) //
+					.userMetadata(userMetadata) //
+					.type(StorageType.BLOB) //
+					.build();
+			blob.getMetadata().setLastModified(remoteFile.lastModified());
+			blob.getMetadata().setCreationDate(remoteFile.created());
+			blob.getMetadata().setId(remoteFile.id());
+			blob.getMetadata().setContainer(container);
+			return blob;
+		} else {
+			// Add entry to cache
+			if (remoteFile instanceof RemoteFolder) {
+				this.remoteFolderCache.put(key, (RemoteFolder) remoteFile);
 			}
-			return count;
+
+			final Map<String, String> userMetadata = new HashMap<>();
+			userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
+
+			final Payload payload = new EmptyPayload();
+			final Blob blob = this.blobBuilders.get() //
+					.payload(payload) //
+					.eTag(base16().lowerCase().encode(DIRECTORY_MD5)) //
+					.name(key.endsWith(SEPARATOR) ? key : key + SEPARATOR) //
+					.userMetadata(userMetadata) //
+					.type(remoteFile.isFolder() ? StorageType.FOLDER : StorageType.BLOB) //
+					.build();
+			blob.getMetadata().setLastModified(remoteFile.lastModified());
+			blob.getMetadata().setCreationDate(remoteFile.created());
+			blob.getMetadata().setId(remoteFile.id());
+			blob.getMetadata().setContainer(container);
+			return blob;
 		}
-		return 0l;
 	}
 
 	/**
@@ -845,12 +748,6 @@ public final class PCloudBlobStore implements BlobStore {
 
 	}
 
-	@Override
-	public PageSet<? extends StorageMetadata> list(String container) {
-		return this.list(container, ListContainerOptions.NONE);
-
-	}
-
 	@SuppressWarnings("deprecation")
 	@Override
 	public PageSet<? extends StorageMetadata> list(String containerName, ListContainerOptions options) {
@@ -915,28 +812,6 @@ public final class PCloudBlobStore implements BlobStore {
 	}
 
 	@Override
-	public void clearContainer(String container) {
-		clearContainer(container, ListContainerOptions.Builder.recursive());
-	}
-
-	@Override
-	public void clearContainer(String container, ListContainerOptions options) {
-		this.pCloudContainerNameValidator.validate(container);
-
-		final boolean recursivly = options.isRecursive();
-
-		try {
-			final RemoteFolder folder = this.getApiClient().listFolder(this.createPath(container), recursivly)
-					.execute();
-			clearRemoteFolder(folder, options);
-			// TODO invalidate cache
-
-		} catch (IOException | ApiError e) {
-			throw new PCloudBlobStoreException(e);
-		}
-	}
-
-	@Override
 	public void deleteContainer(String container) {
 		assertContainerExists(container);
 		try {
@@ -967,7 +842,7 @@ public final class PCloudBlobStore implements BlobStore {
 	@Override
 	public boolean directoryExists(String container, String directory) {
 		assertContainerExists(container);
-		directory = directory.endsWith(SEPARATOR) ? directory.substring(0, directory.length() - 1) : directory;
+		directory = stripDirectorySuffix(directory);
 		RemoteFolder remoteFolder = this.remoteFolderCache.compute(container + SEPARATOR + directory,
 				this::checkOrFetchFolder);
 		return remoteFolder != null;
@@ -977,7 +852,7 @@ public final class PCloudBlobStore implements BlobStore {
 	public void createDirectory(String container, String directory) {
 		assertContainerExists(container);
 		this.pCloudBlobKeyValidator.validate(directory);
-		directory = directory.endsWith(SEPARATOR) ? directory.substring(0, directory.length() - 1) : directory;
+		directory = stripDirectorySuffix(directory);
 		try {
 			RemoteFolder remoteFolder = this.getApiClient().createFolder(this.createPath(container, directory))
 					.execute();
@@ -991,7 +866,7 @@ public final class PCloudBlobStore implements BlobStore {
 	@Override
 	public void deleteDirectory(String containerName, String directory) {
 		assertContainerExists(containerName);
-		directory = directory.endsWith(SEPARATOR) ? directory.substring(0, directory.length() - 1) : directory;
+		directory = stripDirectorySuffix(directory);
 		try {
 			this.getApiClient().deleteFolder(createPath(containerName, directory)).execute();
 			// TODO invalidate cache
@@ -1024,11 +899,6 @@ public final class PCloudBlobStore implements BlobStore {
 		} catch (IOException e) {
 			throw new PCloudBlobStoreException(e);
 		}
-	}
-
-	@Override
-	public String putBlob(String container, Blob blob) {
-		return putBlob(container, blob, PutOptions.NONE);
 	}
 
 	@Override
@@ -1133,20 +1003,12 @@ public final class PCloudBlobStore implements BlobStore {
 	}
 
 	@Override
-	public BlobMetadata blobMetadata(String container, String name) {
-		Blob blob = getBlob(container, name, null);
-		return blob != null ? blob.getMetadata() : null;
-	}
-
-	@Override
-	public Blob getBlob(String container, String name) {
-		return getBlob(container, name, GetOptions.NONE);
-	}
-
-	@Override
 	public Blob getBlob(String container, String name, GetOptions options) {
 		assertContainerExists(container);
 		try {
+			// Remove final directory separator when fetching a directory
+			name = stripDirectorySuffix(name);
+
 			final RemoteFile remoteFile = this.getApiClient().loadFile(createPath(container, name)).execute();
 			final Blob blob = createBlobFromRemoteEntry(container, name, remoteFile);
 
@@ -1300,22 +1162,6 @@ public final class PCloudBlobStore implements BlobStore {
 		this.logger.debug("Setting access rights for PCloud blobs not supported: %s%s%s", container, SEPARATOR, name);
 	}
 
-	@Override
-	public long countBlobs(String container) {
-		return countBlobs(container, ListContainerOptions.Builder.recursive());
-	}
-
-	@Override
-	public long countBlobs(String container, ListContainerOptions options) {
-		assertContainerExists(container);
-		try {
-			final RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(container)).execute();
-			return this.countBlobs(remoteFolder, options);
-		} catch (IOException | ApiError e) {
-			throw new PCloudBlobStoreException(e);
-		}
-	}
-
 	/**
 	 * Utility method to find the {@link PCloudMultipartUpload} implementation for a
 	 * given {@link MultipartUpload} instance
@@ -1391,7 +1237,6 @@ public final class PCloudBlobStore implements BlobStore {
 		if (result.size() > 0) {
 			logger.debug("Found active multipart uploads for container %s: %s", container, result);
 		}
-
 		return result;
 	}
 
@@ -1410,37 +1255,40 @@ public final class PCloudBlobStore implements BlobStore {
 		return Integer.MAX_VALUE;
 	}
 
-	@Override
-	public void downloadBlob(String container, String name, File destination) {
-		try (InputStream ips = this.streamBlob(container, name); OutputStream fos = new FileOutputStream(destination)) {
-			IOUtils.copy(ips, fos);
-		} catch (IOException e) {
-			throw new RuntimeException(e);
-		}
-
-	}
-
-	@Override
-	public void downloadBlob(String container, String name, File destination, ExecutorService executor) {
-		this.downloadBlob(container, name, destination);
-
-	}
-
-	@Override
-	public InputStream streamBlob(String container, String name) {
-		final Blob blob = this.getBlob(container, name);
-		if (blob != null && blob.getPayload() != null) {
-			try {
-				return blob.getPayload().openStream();
-			} catch (IOException e) {
-				throw new RuntimeException(e);
+	/**
+	 * Removes all folders / blobs matching the given {@link ListContainerOptions}
+	 * from the given folder.
+	 * 
+	 * @param parentFolder
+	 * @param remoteFolder
+	 * @param options
+	 * @throws IOException
+	 */
+	private void clearContainer(String parentFolder, RemoteFolder remoteFolder, ListContainerOptions options)
+			throws IOException {
+		for (RemoteEntry entry : remoteFolder.children()) {
+			// Files have a key like folder1/folder2/file, folders like
+			// folder1/folder2/folder/
+			final String key = parentFolder != null ? parentFolder + entry.name()
+					: entry.name() + (entry.isFolder() ? SEPARATOR : "");
+			if (matchesOptions(key, entry, options)) {
+				entry.delete();
+			} else if (options.isRecursive() && entry.isFolder()) {
+				// Check recursively for further targets
+				clearContainer(key, entry.asFolder(), options);
 			}
 		}
-		return null;
 	}
 
 	@Override
-	public InputStream streamBlob(String container, String name, ExecutorService executor) {
-		return this.streamBlob(container, name);
+	public void clearContainer(String container, ListContainerOptions options) {
+		try {
+			final RemoteFolder remoteFolder = this.getApiClient()
+					.listFolder(createPath(container), options.isRecursive()).execute();
+			clearContainer(null, remoteFolder, options);
+		} catch (IOException | ApiError e) {
+			throw new PCloudBlobStoreException(e);
+		}
+
 	}
 }
