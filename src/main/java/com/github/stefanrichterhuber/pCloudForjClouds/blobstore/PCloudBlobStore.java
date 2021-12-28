@@ -127,7 +127,18 @@ public final class PCloudBlobStore implements BlobStore {
 	private final BlobStoreContext context;
 	private final Supplier<Set<? extends Location>> locations;
 	private final MultipartUploadFactory multipartUploadFactory;
+	/**
+	 * Currently active multipart uploads, grouped by the id of the upload
+	 */
 	private final Map<String, PCloudMultipartUpload> currentMultipartUploads = new ConcurrentHashMap<>();
+	/**
+	 * It is necessary to ensure the existence of the parent folder before
+	 * {@link #putBlob(String, Blob, PutOptions)} using
+	 * {@link #assureParentFolder(String)}. Since it is inefficient to fetch folders
+	 * by path, cache the folder id for each
+	 * folder accessed.
+	 */
+	private final Map<String, RemoteFolder> remoteFolderCache = new ConcurrentHashMap<String, RemoteFolder>();
 
 	@Inject
 	protected PCloudBlobStore( //
@@ -150,6 +161,49 @@ public final class PCloudBlobStore implements BlobStore {
 		this.defaultLocation = defaultLocation;
 		this.apiClient = checkNotNull(apiClient, "PCloud api client");
 		this.multipartUploadFactory = checkNotNull(multipartUploadFactory, "multipartupload factory");
+		RemoteFolder baseFolder = this.createBaseDirectory();
+		// Directly add the folder to the cache
+		this.remoteFolderCache.put(baseDirectory, baseFolder);
+	}
+
+	/**
+	 * Creates the root folder for the
+	 */
+	private RemoteFolder createBaseDirectory() {
+		try {
+			RemoteFolder remoteFolder = this.apiClient.loadFolder(this.baseDirectory).execute();
+			if (remoteFolder != null) {
+				return remoteFolder;
+			}
+		} catch (IOException | ApiError e) {
+			// Ignore - folder does not exist
+		}
+
+		// Folder does not exist - create it
+		final String[] parts = baseDirectory.split(SEPARATOR);
+		/*
+		 * Recursively check folder structure starting with base directory
+		 */
+		try {
+			RemoteFolder remoteFolder = this.getApiClient().listFolder("/", true).execute();
+
+			for (int i = 0; i < parts.length; i++) {
+				final int idx = i;
+				final String subFolder = parts[idx];
+
+				RemoteFolder nxt = remoteFolder.children().stream()
+						.filter(re -> re.isFolder() && re.name().equals(subFolder)).findFirst().map(re -> re.asFolder())
+						.orElse(null);
+				if (nxt == null) {
+					// Remote folder not found -> create it and all necessary children
+					nxt = this.getApiClient().createFolder(remoteFolder.folderId(), subFolder).execute();
+				}
+				remoteFolder = nxt;
+			}
+			return remoteFolder;
+		} catch (IOException | ApiError e) {
+			throw new PCloudBlobStoreException(e);
+		}
 
 	}
 
@@ -225,33 +279,96 @@ public final class PCloudBlobStore implements BlobStore {
 	}
 
 	/**
-	 * Checks if all directory parts exists, and create them if necessary
+	 * Checks if the directory exsits, and creates it if not.
 	 * 
-	 * @param rootDir
-	 * @return {@link RemoteFolder} with all parents created
-	 * @throws ApiError
-	 * @throws IOException
+	 * @param dir Directory to create
+	 * @return
 	 */
-	private RemoteFolder assureParentFolder(String rootDir) throws IOException, ApiError {
-		final String[] parts = rootDir.split(SEPARATOR);
-		/*
-		 * Recursively check folder structure starting with base directory
-		 */
-		RemoteFolder remoteFolder = this.getApiClient().listFolder(this.createPath(), true).execute();
-		for (int i = 0; i < parts.length; i++) {
-			final int idx = i;
-			final String subFolder = parts[idx];
+	private RemoteFolder assureParentFolder(String dir) throws IOException, ApiError {
 
-			RemoteFolder nxt = remoteFolder.children().stream()
-					.filter(re -> re.isFolder() && re.name().equals(subFolder)).findFirst().map(re -> re.asFolder())
-					.orElse(null);
-			if (nxt == null) {
-				// Remote folder not found -> create it and all necessary children
-				nxt = this.getApiClient().createFolder(remoteFolder.folderId(), subFolder).execute();
-			}
-			remoteFolder = nxt;
+		final RemoteFolder remoteFolder = this.remoteFolderCache.compute(dir, this::checkOrFetchFolder);
+		if (remoteFolder != null) {
+			return remoteFolder;
 		}
-		return remoteFolder;
+
+		// Remote folder does not exists, check for its parent
+		final String parentDir = dir.substring(0, dir.lastIndexOf(SEPARATOR));
+		final RemoteFolder parentFolder = assureParentFolder(parentDir);
+
+		// Now check again and create folder if still necessary
+		final RemoteFolder result = this.remoteFolderCache.computeIfAbsent(dir,
+				k -> this.createOrFetchFolder(parentFolder.folderId(), k));
+		return result;
+	}
+
+	/**
+	 * Tries to create the given folder. If it fails because the backend already
+	 * knows the folder, fetch it.
+	 * 
+	 * @param dir
+	 * @param parentFolderId Id of the parent folder
+	 * @return
+	 */
+	private RemoteFolder createOrFetchFolder(long parentFolderId, String dir) {
+		final String name = dir.substring(dir.lastIndexOf(SEPARATOR) + 1);
+		try {
+			final RemoteFolder rf = this.apiClient.createFolder(parentFolderId, name).execute();
+			if (rf != null) {
+				this.logger.info("Parent folder %s with id %d created!", dir, rf.folderId());
+			}
+			return rf;
+		} catch (ApiError e) {
+			final PCloudError pCloudError = PCloudError.parse(e);
+			if (pCloudError == PCloudError.ALREADY_EXISTS) {
+				// File already exists, try to fetch it from the parent folder
+				try {
+					RemoteFolder remoteFolder = this.apiClient.loadFolder(parentFolderId).execute().children().stream()
+							.filter(RemoteEntry::isFolder).map(RemoteEntry::asFolder)
+							.filter(rf -> rf.name().equals(name)).findFirst().orElse(null);
+					return remoteFolder;
+				} catch (IOException | ApiError e1) {
+					// Ignore --> just throw the previous exception
+				}
+			}
+			throw new PCloudBlobStoreException(e);
+		} catch (IOException e) {
+			throw new PCloudBlobStoreException(e);
+		}
+	}
+
+	/**
+	 * Checks if the given folder still exists, of if null, check if a folder for
+	 * the given dir exists.
+	 * 
+	 * @param dir
+	 * @param v
+	 * @return
+	 */
+	private RemoteFolder checkOrFetchFolder(String dir, RemoteFolder v) {
+		if (v != null) {
+			// Remotefolder in cache, check if still present
+			try {
+				RemoteFolder remoteFolder = this.apiClient.loadFolder(v.folderId()).execute();
+				if (remoteFolder != null) {
+					this.logger.info("Parent folder %s with id %d exists in cache and remote.", dir, v.folderId());
+					return remoteFolder;
+				}
+			} catch (IOException | ApiError e) {
+				this.logger.info("Parent folder %s with id %d exists in cache but not remote!", dir, v.folderId());
+				// Folder does not exist anymore
+				return null;
+			}
+		}
+		// Folder not in cache, check if present remote
+		try {
+			RemoteFolder remoteFolder = this.apiClient.listFolder(this.createPath(dir)).execute();
+			this.logger.info("Parent folder %s exists only remote, but not yet in cache.", dir);
+			return remoteFolder;
+		} catch (IOException | ApiError e) {
+			this.logger.info("Parent folder %s does not exist.", dir);
+			// Folder does not exist remote
+			return null;
+		}
 	}
 
 	/**
@@ -354,7 +471,8 @@ public final class PCloudBlobStore implements BlobStore {
 					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile());
 					result.add(blob.getMetadata());
 				} else if (entry.isFolder()) {
-					if (options != null && options.getPrefix() != null && entry.name().startsWith(options.getPrefix())) {
+					if (options != null && options.getPrefix() != null
+							&& entry.name().startsWith(options.getPrefix())) {
 						final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder());
 						result.add(blob.getMetadata());
 					}
@@ -576,6 +694,9 @@ public final class PCloudBlobStore implements BlobStore {
 		if (remoteFile.isFile()) {
 			return createBlobFromRemoteEntry(container, key, remoteFile.asFile());
 		}
+		// Add entry to cache
+		this.remoteFolderCache.put(key, remoteFile);
+
 		final Map<String, String> userMetadata = new HashMap<>();
 		userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
 
@@ -696,8 +817,8 @@ public final class PCloudBlobStore implements BlobStore {
 	public boolean createContainerInLocation(Location location, String container) {
 		this.pCloudContainerNameValidator.validate(container);
 		try {
-			String path = createPath(container);
-			RemoteFolder remoteFolder = this.getApiClient().createFolder(path).execute();
+			RemoteFolder remoteFolder = this.getApiClient().createFolder(createPath(container)).execute();
+			this.remoteFolderCache.put(container, remoteFolder);
 			return remoteFolder.isFolder();
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
@@ -795,7 +916,6 @@ public final class PCloudBlobStore implements BlobStore {
 	@Override
 	public void clearContainer(String container) {
 		clearContainer(container, ListContainerOptions.Builder.recursive());
-
 	}
 
 	@Override
@@ -808,6 +928,8 @@ public final class PCloudBlobStore implements BlobStore {
 			final RemoteFolder folder = this.getApiClient().listFolder(this.createPath(container), recursivly)
 					.execute();
 			clearRemoteFolder(folder, options);
+			// TODO invalidate cache
+
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}
@@ -819,6 +941,7 @@ public final class PCloudBlobStore implements BlobStore {
 		try {
 			final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
 			folder.delete(true);
+			// TODO invalidate cache
 			this.logger.debug("Successfully deleted container %s", container);
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
@@ -833,6 +956,7 @@ public final class PCloudBlobStore implements BlobStore {
 			final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
 			folder.delete(true);
 			this.logger.debug("Successfully deleted container %s", container);
+			// TODO invalidate cache
 			return true;
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
@@ -842,22 +966,21 @@ public final class PCloudBlobStore implements BlobStore {
 	@Override
 	public boolean directoryExists(String container, String directory) {
 		assertContainerExists(container);
-		try {
-			return this.getApiClient().listFolder(createPath(container, directory)).execute().isFolder();
-		} catch (IOException | ApiError e) {
-			if (e instanceof ApiError && PCloudError.parse((ApiError) e) == PCloudError.DIRECTORY_DOES_NOT_EXIST) {
-				return false;
-			}
-			throw new PCloudBlobStoreException(e);
-		}
+		directory = directory.endsWith(SEPARATOR) ? directory.substring(0, directory.length() - 1) : directory;
+		RemoteFolder remoteFolder = this.remoteFolderCache.compute(container + SEPARATOR + directory,
+				this::checkOrFetchFolder);
+		return remoteFolder != null;
 	}
 
 	@Override
 	public void createDirectory(String container, String directory) {
 		assertContainerExists(container);
 		this.pCloudBlobKeyValidator.validate(directory);
+		directory = directory.endsWith(SEPARATOR) ? directory.substring(0, directory.length() - 1) : directory;
 		try {
-			this.getApiClient().createFolder(this.createPath(container, directory)).execute();
+			RemoteFolder remoteFolder = this.getApiClient().createFolder(this.createPath(container, directory))
+					.execute();
+			this.remoteFolderCache.put(container + SEPARATOR + directory, remoteFolder);
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}
@@ -865,10 +988,12 @@ public final class PCloudBlobStore implements BlobStore {
 	}
 
 	@Override
-	public void deleteDirectory(String containerName, String name) {
+	public void deleteDirectory(String containerName, String directory) {
 		assertContainerExists(containerName);
+		directory = directory.endsWith(SEPARATOR) ? directory.substring(0, directory.length() - 1) : directory;
 		try {
-			this.getApiClient().deleteFolder(createPath(containerName, name)).execute();
+			this.getApiClient().deleteFolder(createPath(containerName, directory)).execute();
+			// TODO invalidate cache
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}

@@ -47,6 +47,7 @@ public class PCloudForJCloudTest {
 	
 	@Before
 	public void setup() throws InterruptedException {
+		
 		Properties properties = new Properties();
 		properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
 		properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, System.getenv("PCLOUD_TOKEN"));
@@ -448,6 +449,7 @@ public class PCloudForJCloudTest {
 
 			etags.add(blobStore.putBlob(container, blob));
 		}
+		Thread.sleep(TIME_TO_WAIT);
 
 		/*
 		 * Should list all files
