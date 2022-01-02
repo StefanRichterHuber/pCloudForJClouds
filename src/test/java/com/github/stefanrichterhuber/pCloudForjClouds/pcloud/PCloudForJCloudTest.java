@@ -10,7 +10,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -52,6 +54,7 @@ public class PCloudForJCloudTest {
 		Properties properties = new Properties();
 		properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
 		properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, System.getenv("PCLOUD_TOKEN"));
+		properties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "test-metadata");
 
 		BlobStoreContext context = ContextBuilder.newBuilder("pcloud").overrides(properties)
 				.build(BlobStoreContext.class);
@@ -234,13 +237,15 @@ public class PCloudForJCloudTest {
 	public void shouldUploadAndDownloadContent() throws IOException, InterruptedException {
 		String blobName = UUID.randomUUID().toString() + ".txt";
 		String blobContent = UUID.randomUUID().toString();
-
+		Map<String, String> md = new HashMap<>();
+		md.put("Usermetadata1", "user meta data value1");
 		// Blob should not exist
 		assertFalse(blobStore.blobExists(container, blobName));
 
 		// Upload content
 		Blob blob = blobStore.blobBuilder(blobName)//
 				.payload(blobContent) //
+				.userMetadata(md) //
 				.build();
 
 		String etag = blobStore.putBlob(container, blob);
@@ -255,7 +260,7 @@ public class PCloudForJCloudTest {
 		assertNotNull(result);
 		String resultContent = IOUtils.toString(result.getPayload().openStream(), StandardCharsets.UTF_8.name());
 		assertEquals("Content should be equal", blobContent, resultContent);
-
+		assertEquals(md, result.getMetadata().getUserMetadata());
 		// Delete blob
 		blobStore.removeBlob(container, blobName);
 		Thread.sleep(TIME_TO_WAIT);
@@ -270,6 +275,8 @@ public class PCloudForJCloudTest {
 	public void shouldCopyBlob() throws InterruptedException, IOException {
 
 		String sourceBlobName = UUID.randomUUID().toString() + ".txt";
+		Map<String, String> md = new HashMap<>();
+		md.put("Usermetadata1", "user meta data value1");
 		String blobContent = UUID.randomUUID().toString();
 
 		String targetBlobName = UUID.randomUUID().toString() + ".txt";
@@ -277,6 +284,7 @@ public class PCloudForJCloudTest {
 		// Upload content
 		Blob blob = blobStore.blobBuilder(sourceBlobName)//
 				.payload(blobContent) //
+				.userMetadata(md)
 				.build();
 		String etag = blobStore.putBlob(container, blob);
 		assertNotNull("Should have an etag", etag);
@@ -298,6 +306,7 @@ public class PCloudForJCloudTest {
 		assertNotNull(result);
 		String resultContent = IOUtils.toString(result.getPayload().openStream(), StandardCharsets.UTF_8.name());
 		assertEquals("Content should be equal", blobContent, resultContent);
+		assertEquals(md, result.getMetadata().getUserMetadata());
 
 		// Delete blobs
 		blobStore.removeBlob(container, sourceBlobName);

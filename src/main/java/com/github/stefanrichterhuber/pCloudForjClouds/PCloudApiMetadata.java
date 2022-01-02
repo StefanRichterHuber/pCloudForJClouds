@@ -8,6 +8,7 @@ import org.jclouds.blobstore.BlobStoreContext;
 import org.jclouds.rest.internal.BaseHttpApiMetadata;
 
 import com.github.stefanrichterhuber.pCloudForjClouds.config.PCloudCustomBlobStoreContextModule;
+import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 
 public class PCloudApiMetadata extends BaseApiMetadata {
 
@@ -27,6 +28,8 @@ public class PCloudApiMetadata extends BaseApiMetadata {
    @Override
    public Properties getDefaultProperties() {
       Properties properties = BaseHttpApiMetadata.defaultProperties();
+      properties.put(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE, true);
+      properties.put(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "blobstore-metadata");
       return properties;
    }
 

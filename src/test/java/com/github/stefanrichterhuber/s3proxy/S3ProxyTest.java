@@ -10,7 +10,9 @@ import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -139,7 +141,8 @@ public class S3ProxyTest {
 
 	@Test
 	public void shouldPutAndGetContent() throws IOException {
-
+		Map<String, String> md = new HashMap<>();
+		md.put("Usermetadata1", "user meta data value1");
 		String bucket = UUID.randomUUID().toString();
 		String key = UUID.randomUUID().toString();
 
@@ -147,6 +150,7 @@ public class S3ProxyTest {
 
 		// Upload
 		ObjectMetadata om = new ObjectMetadata();
+		om.setUserMetadata(md);
 		om.setContentLength(CONTENT_BYTES.length);
 		s3Client.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(CONTENT_BYTES), om));
 
@@ -156,6 +160,7 @@ public class S3ProxyTest {
 			byte[] resultArray = IOUtils.toByteArray(inputStream);
 			assertEquals(CONTENT, new String(resultArray, Charsets.UTF_8));
 		}
+		assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
 
 		s3Client.deleteBucket(bucket);
 	}
@@ -164,12 +169,15 @@ public class S3ProxyTest {
 	public void shouldDoS3Multipart() throws Exception {
 		String bucket = UUID.randomUUID().toString();
 		String key = UUID.randomUUID().toString();
+		Map<String, String> md = new HashMap<>();
+		md.put("Usermetadata1", "user meta data value1");
 
 		s3Client.createBucket(bucket);
 
 		LOGGER.info("Uploading to key {} to bucket", key, bucket);
 
 		ObjectMetadata omd = new ObjectMetadata();
+		omd.setUserMetadata(md);
 		InitiateMultipartUploadResult initiateMultipartUpload = s3Client
 				.initiateMultipartUpload(new InitiateMultipartUploadRequest(bucket, key, omd) //
 						.withObjectMetadata(omd));
@@ -182,6 +190,7 @@ public class S3ProxyTest {
 					.withKey("key" + i).withUploadId(initiateMultipartUpload.getUploadId()) //
 					.withInputStream(new ByteArrayInputStream(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8))) //
 					.withPartSize(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8).length).withPartNumber(i + 1));
+
 			partEtags.add(part.getPartETag());
 		}
 
@@ -195,6 +204,7 @@ public class S3ProxyTest {
 			byte[] resultArray = IOUtils.toByteArray(inputStream);
 			assertEquals(CONTENT, new String(resultArray, Charsets.UTF_8));
 		}
+		assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
 
 		s3Client.deleteBucket(bucket);
 	}

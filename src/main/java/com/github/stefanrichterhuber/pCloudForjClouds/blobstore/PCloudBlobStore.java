@@ -24,7 +24,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Provider;
@@ -64,7 +63,8 @@ import org.jclouds.http.HttpUtils;
 import org.jclouds.io.ByteStreams2;
 import org.jclouds.io.ContentMetadata;
 import org.jclouds.io.Payload;
-import org.jclouds.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.AbstractBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.BlobDataSource;
@@ -72,6 +72,7 @@ import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.EmptyPa
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudBlobStoreException;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudError;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudMultipartUpload;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudUtils;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.RemoteFilePayload;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudBlobKeyValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudContainerNameValidator;
@@ -89,8 +90,6 @@ import com.google.common.io.ByteSource;
 import com.google.common.net.HttpHeaders;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
-import com.pcloud.sdk.Call;
-import com.pcloud.sdk.Callback;
 import com.pcloud.sdk.DataSource;
 import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFile;
@@ -112,8 +111,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	@SuppressWarnings("deprecation")
 	private static final byte[] DIRECTORY_MD5 = Hashing.md5().hashBytes(EMPTY_CONTENT).asBytes();
 
-	@Resource
-	protected Logger logger = Logger.NULL;
+	private static final Logger LOGGER = LoggerFactory.getLogger(PCloudBlobStore.class);
 
 	private final Provider<BlobBuilder> blobBuilders;
 	private final String baseDirectory;
@@ -124,6 +122,8 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	private final BlobStoreContext context;
 	private final Supplier<Set<? extends Location>> locations;
 	private final MultipartUploadFactory multipartUploadFactory;
+	private final MetadataStrategy metadataStrategy;
+
 	/**
 	 * Currently active multipart uploads, grouped by the id of the upload
 	 */
@@ -145,6 +145,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			PCloudBlobKeyValidator pCloudBlobKeyValidator, //
 			@Memoized Supplier<Set<? extends Location>> locations, //
 			MultipartUploadFactory multipartUploadFactory, //
+			MetadataStrategy metadataStrategy, //
 			Supplier<Location> defaultLocation //
 	) {
 		this.locations = checkNotNull(locations, "locations");
@@ -157,50 +158,10 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		this.defaultLocation = defaultLocation;
 		this.apiClient = checkNotNull(apiClient, "PCloud api client");
 		this.multipartUploadFactory = checkNotNull(multipartUploadFactory, "multipartupload factory");
-		RemoteFolder baseFolder = this.createBaseDirectory();
+		RemoteFolder baseFolder = PCloudUtils.createBaseDirectory(this.apiClient, this.baseDirectory);
 		// Directly add the folder to the cache
 		this.remoteFolderCache.put(baseDirectory, baseFolder);
-	}
-
-	/**
-	 * Creates the root folder for the
-	 */
-	private RemoteFolder createBaseDirectory() {
-		try {
-			RemoteFolder remoteFolder = this.apiClient.loadFolder(this.baseDirectory).execute();
-			if (remoteFolder != null) {
-				return remoteFolder;
-			}
-		} catch (IOException | ApiError e) {
-			// Ignore - folder does not exist
-		}
-
-		// Folder does not exist - create it
-		final String[] parts = baseDirectory.split(SEPARATOR);
-		/*
-		 * Recursively check folder structure starting with base directory
-		 */
-		try {
-			RemoteFolder remoteFolder = this.getApiClient().listFolder("/", true).execute();
-
-			for (int i = 0; i < parts.length; i++) {
-				final int idx = i;
-				final String subFolder = parts[idx];
-
-				RemoteFolder nxt = remoteFolder.children().stream()
-						.filter(re -> re.isFolder() && re.name().equals(subFolder)).findFirst().map(re -> re.asFolder())
-						.orElse(null);
-				if (nxt == null) {
-					// Remote folder not found -> create it and all necessary children
-					nxt = this.getApiClient().createFolder(remoteFolder.folderId(), subFolder).execute();
-				}
-				remoteFolder = nxt;
-			}
-			return remoteFolder;
-		} catch (IOException | ApiError e) {
-			throw new PCloudBlobStoreException(e);
-		}
-
+		this.metadataStrategy = metadataStrategy;
 	}
 
 	/**
@@ -253,8 +214,8 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	private void assertContainerExists(String container) {
 		this.pCloudContainerNameValidator.validate(container);
 		if (!this.containerExists(container)) {
-			logger.warn("Container %s does not exist", container);
-			throw new ContainerNotFoundException(container, String.format("Container %s not found in %s", container,
+			LOGGER.warn("Container {} does not exist", container);
+			throw new ContainerNotFoundException(container, String.format("Container {} not found in {}", container,
 					this.getAllContainerNames().stream().collect(Collectors.joining(", "))));
 		}
 	}
@@ -269,7 +230,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		this.pCloudContainerNameValidator.validate(container);
 		this.pCloudBlobKeyValidator.validate(name);
 		if (!this.blobExists(container, name)) {
-			logger.warn("Blob %s does not exist in container %s", name, container);
+			LOGGER.warn("Blob {} does not exist in container {}", name, container);
 			throw new KeyNotFoundException(container, name, "Not found");
 		}
 	}
@@ -310,7 +271,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		try {
 			final RemoteFolder rf = this.apiClient.createFolder(parentFolderId, name).execute();
 			if (rf != null) {
-				this.logger.info("Parent folder %s with id %d created!", dir, rf.folderId());
+				LOGGER.info("Parent folder {} with id {} created!", dir, rf.folderId());
 			}
 			return rf;
 		} catch (ApiError e) {
@@ -346,11 +307,11 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			try {
 				RemoteFolder remoteFolder = this.apiClient.loadFolder(v.folderId()).execute();
 				if (remoteFolder != null) {
-					this.logger.debug("Parent folder %s with id %d exists in cache and remote.", dir, v.folderId());
+					LOGGER.debug("Parent folder {} with id {} exists in cache and remote.", dir, v.folderId());
 					return remoteFolder;
 				}
 			} catch (IOException | ApiError e) {
-				this.logger.debug("Parent folder %s with id %d exists in cache but not remote!", dir, v.folderId());
+				LOGGER.debug("Parent folder {} with id {} exists in cache but not remote!", dir, v.folderId());
 				// Folder does not exist anymore
 				return null;
 			}
@@ -358,10 +319,10 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		// Folder not in cache, check if present remote
 		try {
 			RemoteFolder remoteFolder = this.apiClient.listFolder(this.createPath(dir)).execute();
-			this.logger.debug("Parent folder %s exists only remote, but not yet in cache.", dir);
+			LOGGER.debug("Parent folder {} exists only remote, but not yet in cache.", dir);
 			return remoteFolder;
 		} catch (IOException | ApiError e) {
-			this.logger.debug("Parent folder %s does not exist.", dir);
+			LOGGER.debug("Parent folder {} does not exist.", dir);
 			// Folder does not exist remote
 			return null;
 		}
@@ -445,6 +406,11 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	 * @throws IOException
 	 */
 	private static DataSource dataSourceFromBlob(Blob blob) throws IOException {
+		if (blob.getMetadata().getSize() != null && blob.getMetadata().getSize().longValue() != blob.getPayload()
+				.getContentMetadata().getContentLength().longValue()) {
+			LOGGER.warn("Size ({} bytes) of blob does not equal content length ({} bytes): {}",
+					blob.getMetadata().getSize(), blob.getPayload().getContentMetadata().getContentLength(), blob);
+		}
 		return new BlobDataSource(blob);
 	}
 
@@ -456,21 +422,28 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	 * @param remoteFolder {@link RemoteFolder} to check
 	 * @param options      {@link ListContainerOptions} to apply
 	 * @return
+	 * @throws ExecutionException
+	 * @throws InterruptedException
 	 */
 	private SortedSet<StorageMetadata> collectStorageMetadata(String container, String parentFolder,
-			final RemoteFolder remoteFolder, ListContainerOptions options) {
+			final RemoteFolder remoteFolder, ListContainerOptions options)
+			throws InterruptedException, ExecutionException {
 		final SortedSet<StorageMetadata> result = new TreeSet<>();
 		for (RemoteEntry entry : remoteFolder.children()) {
 			// Files have a key like folder1/folder2/file, folders like
 			// folder1/folder2/folder/
 			final String key = parentFolder != null ? parentFolder + entry.name()
 					: entry.name() + (entry.isFolder() ? SEPARATOR : "");
+			// Only fetch custom metadata if detailed metadata is requested.
+			final Map<String, String> metadata = options.isDetailed()
+					? this.metadataStrategy.get(container, key).exceptionally(e -> Collections.emptyMap()).get()
+					: Collections.emptyMap();
 			if (matchesOptions(key, entry, options)) {
 				if (entry.isFile()) {
-					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile());
+					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile(), metadata);
 					result.add(blob.getMetadata());
 				} else if (entry.isFolder()) {
-					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder());
+					final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder(), metadata);
 					result.add(blob.getMetadata());
 				}
 			}
@@ -492,7 +465,6 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	 *                    against.
 	 * @return
 	 */
-	@SuppressWarnings("deprecation")
 	private boolean matchesOptions(String key, RemoteEntry remoteEntry, ListContainerOptions options) {
 		if (options == null || options == ListContainerOptions.NONE) {
 			return true;
@@ -502,12 +474,6 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		}
 		if (remoteEntry.isFolder() && !options.isRecursive()) {
 			return false;
-		}
-		if (options.getDelimiter() != null) {
-			this.logger.warn("ListContainerOption 'delimiter' not supported");
-		}
-		if (options.getDir() != null) {
-			this.logger.warn("ListContainerOption 'dir' not supported");
 		}
 		return true;
 	}
@@ -526,14 +492,14 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			metadata.setLastModified(remoteFolder.lastModified());
 			metadata.setId(remoteFolder.id());
 
-			logger.debug("Requested storage metadata for container %s: %s", container, metadata);
+			LOGGER.debug("Requested storage metadata for container {}: {}", container, metadata);
 
 			return metadata;
 		} catch (ApiError e) {
 			final PCloudError pCloudError = PCloudError.parse(e);
 			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
 					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Container %s not found: %s", container, pCloudError.getCode());
+				LOGGER.debug("Container {} not found: {}", container, pCloudError.getCode());
 				return null;
 			}
 			throw new PCloudBlobStoreException(e);
@@ -592,12 +558,12 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	 * 
 	 * @param container  Host container of the file
 	 * @param remoteFile {@link RemoteFile}.
+	 * @param userMetadata Custom user metadata for the blob.
 	 * @return {@link Blob} created
 	 */
-	private Blob createBlobFromRemoteEntry(String container, String key, RemoteEntry remoteFile) {
+	private Blob createBlobFromRemoteEntry(String container, String key, RemoteEntry remoteFile,
+			Map<String, String> userMetadata) {
 		Blob blob = null;
-		final Map<String, String> userMetadata = new HashMap<>();
-		userMetadata.put("parentFolderId", "" + remoteFile.parentFolderId());
 
 		if (remoteFile instanceof RemoteFile && remoteFile.isFile()) {
 			final RemoteFile file = (RemoteFile) remoteFile;
@@ -638,32 +604,6 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		return blob;
 	}
 
-	/**
-	 * Utility function to execute a {@link Call} async and wrap its results in a
-	 * {@link CompletableFuture}.
-	 * 
-	 * @param <T>
-	 * @param call {@link Call} to execute and wrap
-	 * @return {@link CompletableFuture} containing the result of the {@link Call}.
-	 */
-	private static <T> CompletableFuture<T> execute(Call<T> call) {
-		final CompletableFuture<T> result = new CompletableFuture<T>();
-
-		call.enqueue(new Callback<T>() {
-
-			@Override
-			public void onResponse(Call<T> call, T response) {
-				result.complete(response);
-			}
-
-			@Override
-			public void onFailure(Call<T> call, Throwable t) {
-				result.completeExceptionally(t);
-			}
-		});
-		return result;
-	}
-
 	@Override
 	public BlobStoreContext getContext() {
 		return context;
@@ -681,7 +621,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 
 	@Override
 	public PageSet<? extends StorageMetadata> list() {
-		logger.info("Requested storage metadata for all containers");
+		LOGGER.info("Requested storage metadata for all containers");
 
 		ArrayList<String> containers = new ArrayList<String>(getAllContainerNames());
 		Collections.sort(containers);
@@ -722,21 +662,21 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	@Override
 	public ContainerAccess getContainerAccess(String container) {
 		this.pCloudContainerNameValidator.validate(container);
-		this.logger.debug("Retrieving access rights for PCloud containers not supported: %s", container);
+		LOGGER.debug("Retrieving access rights for PCloud containers not supported: {}", container);
 		return ContainerAccess.PRIVATE;
 	}
 
 	@Override
 	public void setContainerAccess(String container, ContainerAccess access) {
 		this.pCloudContainerNameValidator.validate(container);
-		this.logger.debug("Settings access rights for PCloud containers not supported: %s", container);
+		LOGGER.debug("Settings access rights for PCloud containers not supported: {}", container);
 
 	}
 
 	@SuppressWarnings("deprecation")
 	@Override
 	public PageSet<? extends StorageMetadata> list(String containerName, ListContainerOptions options) {
-		logger.info("Requested storage metadata for container %s with options %s", containerName, options);
+		LOGGER.info("Requested storage metadata for container {} with options {}", containerName, options);
 		if (options.getDir() != null && options.getPrefix() != null) {
 			throw new IllegalArgumentException("Cannot set both prefix and directory");
 		}
@@ -791,7 +731,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			}
 
 			return new PageSetImpl<StorageMetadata>(contents, marker);
-		} catch (IOException | ApiError e) {
+		} catch (IOException | ApiError | InterruptedException | ExecutionException e) {
 			throw new PCloudBlobStoreException(e);
 		}
 	}
@@ -803,7 +743,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
 			folder.delete(true);
 			// TODO invalidate cache
-			this.logger.debug("Successfully deleted container %s", container);
+			LOGGER.debug("Successfully deleted container {}", container);
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}
@@ -816,7 +756,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		try {
 			final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
 			folder.delete(true);
-			this.logger.debug("Successfully deleted container %s", container);
+			LOGGER.debug("Successfully deleted container {}", container);
 			// TODO invalidate cache
 			return true;
 		} catch (IOException | ApiError e) {
@@ -877,7 +817,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			final PCloudError pCloudError = PCloudError.parse(e);
 			if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
 					|| pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Blob %s/%s not found: %s", container, key, pCloudError.getCode());
+				LOGGER.debug("Blob {}/{} not found: {}", container, key, pCloudError.getCode());
 				return false;
 			}
 			throw new PCloudBlobStoreException(e);
@@ -891,7 +831,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		assertContainerExists(container);
 		this.pCloudBlobKeyValidator.validate(blob.getMetadata().getName());
 
-		logger.debug("Uploading blob %s to container %s", container, blob);
+		LOGGER.debug("Uploading blob {} to container {}", container, blob);
 		try {
 			if (getDirectoryBlobSuffix(blob.getMetadata().getName()) != null) {
 				return putDirectoryBlob(container, blob);
@@ -905,11 +845,16 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			final RemoteFolder targetFolder = assureParentFolder(rootDir);
 
 			final DataSource ds = dataSourceFromBlob(blob);
-			final Call<RemoteFile> createdFile = this.getApiClient().createFile(targetFolder, name, ds,
-					blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE);
-			RemoteFile remoteFile = createdFile.execute();
+			final CompletableFuture<RemoteFile> fileRequest = PCloudUtils.execute(this.getApiClient().createFile(
+					targetFolder, name, ds, blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE));
+			final CompletableFuture<Void> metadataRequest = this.metadataStrategy.put(container,
+					blob.getMetadata().getName(), blob.getMetadata().getUserMetadata());
+
+			metadataRequest.get();
+			final RemoteFile remoteFile = fileRequest.get();
+
 			return remoteFile.hash();
-		} catch (IOException | ApiError e) {
+		} catch (IOException | ApiError | InterruptedException | ExecutionException e) {
 			throw new PCloudBlobStoreException(e);
 		}
 	}
@@ -941,7 +886,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			// Exceptions are thrown if etag / modifications dates do not pass
 			Blob source = this.getBlob(fromContainer, fromName, getOptions);
 
-			if (source.getPayload().getRawContent() instanceof RemoteFile) {
+			if (source != null && source.getPayload().getRawContent() instanceof RemoteFile) {
 
 				final RemoteFile sourceFile = (RemoteFile) source.getPayload().getRawContent();
 				final RemoteFolder targetFolder = this.assureParentFolder(getFolderOfKey(toContainer, toName));
@@ -963,6 +908,9 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 					temp.delete();
 				}
 
+				// Copy metadata
+				this.metadataStrategy.copy(fromContainer, fromName, toContainer, toName).get();
+
 				if (result != null) {
 					return result.isFile() ? result.asFile().hash() : base16().lowerCase().encode(DIRECTORY_MD5);
 				} else {
@@ -981,10 +929,9 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 						"Source not found / is not a real file during copy");
 			}
 			throw new PCloudBlobStoreException(e);
-		} catch (IOException e) {
+		} catch (IOException | InterruptedException | ExecutionException e) {
 			throw new PCloudBlobStoreException(e);
 		}
-
 	}
 
 	@Override
@@ -994,8 +941,13 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			// Remove final directory separator when fetching a directory
 			name = stripDirectorySuffix(name);
 
-			final RemoteFile remoteFile = this.getApiClient().loadFile(createPath(container, name)).execute();
-			final Blob blob = createBlobFromRemoteEntry(container, name, remoteFile);
+			final CompletableFuture<RemoteFile> remoteFileRequest = PCloudUtils
+					.execute(this.getApiClient().loadFile(createPath(container, name)));
+			final CompletableFuture<Map<String, String>> metadataRequest = this.metadataStrategy.get(container, name);
+
+			final RemoteFile remoteFile = remoteFileRequest.get();
+			final Map<String, String> metadata = metadataRequest.get();
+			final Blob blob = createBlobFromRemoteEntry(container, name, remoteFile, metadata);
 
 			if (options != null && options != GetOptions.NONE) {
 				final String eTag = maybeQuoteETag(remoteFile.hash());
@@ -1078,33 +1030,36 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 				}
 			}
 			return blob;
-		} catch (ApiError e) {
-			final PCloudError pCloudError = PCloudError.parse(e);
-			if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-				logger.debug("Blob %s/%s not found: %s", container, name, pCloudError.getCode());
-				return null;
-			}
-			if (pCloudError == PCloudError.PARENT_DIR_DOES_NOT_EXISTS) {
-				logger.warn("Parent folder of blob %s/%s does not exist", container, name);
-				return null;
-			}
+		} catch (IOException | InterruptedException e) {
 			throw new PCloudBlobStoreException(e);
-		} catch (IOException e) {
+		} catch (ExecutionException e) {
+			if (e.getCause() instanceof ApiError) {
+				final PCloudError pCloudError = PCloudError.parse((ApiError) e.getCause());
+				if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+					LOGGER.debug("Blob {}/{} not found: {}", container, name, pCloudError.getCode());
+					return null;
+				}
+				if (pCloudError == PCloudError.PARENT_DIR_DOES_NOT_EXISTS) {
+					LOGGER.warn("Parent folder of blob {}/{} does not exist", container, name);
+					return null;
+				}
+			}
 			throw new PCloudBlobStoreException(e);
 		}
-
 	}
 
 	@Override
 	public void removeBlob(String container, String name) {
 		this.pCloudContainerNameValidator.validate(container);
 		try {
-			final Boolean result = execute(this.getApiClient().deleteFile(this.createPath(container, name))).get();
-			if (!result) {
-				logger.error("Failed to delete %s%s%s", container, SEPARATOR, name);
+			final CompletableFuture<Boolean> result = PCloudUtils
+					.execute(this.getApiClient().deleteFile(this.createPath(container, name)));
+			this.metadataStrategy.delete(container, name).get();
+			if (!result.get()) {
+				LOGGER.error("Failed to delete {}{}{}", container, SEPARATOR, name);
 			}
 		} catch (InterruptedException | ExecutionException e) {
-			logger.warn("Failed to delete %s%s%s: %s", container, SEPARATOR, name, e);
+			LOGGER.warn("Failed to delete {}{}{}: {}", container, SEPARATOR, name, e);
 			throw new PCloudBlobStoreException(e);
 		}
 	}
@@ -1116,17 +1071,18 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			// Start all remove jobs in parallel
 			final Map<String, CompletableFuture<Boolean>> jobs = new HashMap<>();
 			for (String name : names) {
-				jobs.put(name, execute(this.getApiClient().deleteFile(createPath(container, name))));
+				this.metadataStrategy.delete(container, name);
+				jobs.put(name, PCloudUtils.execute(this.getApiClient().deleteFile(createPath(container, name))));
 			}
 			for (Entry<String, CompletableFuture<Boolean>> entry : jobs.entrySet()) {
 				try {
 					if (entry.getValue().get()) {
-						logger.debug("Successfully deleted %s%s%s", container, entry.getKey());
+						LOGGER.debug("Successfully deleted {}{}{}", container, entry.getKey());
 					} else {
-						logger.error("Failed to delete %s%s%s", container, SEPARATOR, entry.getKey());
+						LOGGER.error("Failed to delete {}{}{}", container, SEPARATOR, entry.getKey());
 					}
 				} catch (InterruptedException | ExecutionException e) {
-					logger.error("Failed to delete %s%s%s: %s", container, SEPARATOR, entry.getKey(), e);
+					LOGGER.error("Failed to delete {}{}{}: {}", container, SEPARATOR, entry.getKey(), e);
 				}
 			}
 		}
@@ -1135,8 +1091,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	@Override
 	public BlobAccess getBlobAccess(String container, String name) {
 		assertContainerExists(container);
-		this.logger.debug("Retrieving access rights for PCloud blobs not supported: %s%s%s", container, SEPARATOR,
-				name);
+		LOGGER.debug("Retrieving access rights for PCloud blobs not supported: {}{}{}", container, SEPARATOR, name);
 		return BlobAccess.PRIVATE;
 	}
 
@@ -1144,7 +1099,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	public void setBlobAccess(String container, String name, BlobAccess access) {
 		assertContainerExists(container);
 		assertBlobExists(container, name);
-		this.logger.debug("Setting access rights for PCloud blobs not supported: %s%s%s", container, SEPARATOR, name);
+		LOGGER.debug("Setting access rights for PCloud blobs not supported: {}{}{}", container, SEPARATOR, name);
 	}
 
 	/**
@@ -1180,6 +1135,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			PCloudMultipartUpload upload = this.multipartUploadFactory.create(targetFolder.folderId(), container, name,
 					uploadId, blobMetadata, options);
 			upload.start();
+			this.metadataStrategy.put(container, blobMetadata.getName(), blobMetadata.getUserMetadata());
 			this.currentMultipartUploads.put(uploadId, upload);
 			return upload;
 		} catch (IOException | ApiError e) {
@@ -1191,6 +1147,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	public void abortMultipartUpload(MultipartUpload mpu) {
 		resolveUpload(mpu).abort();
 		this.currentMultipartUploads.remove(mpu.id());
+		this.metadataStrategy.delete(mpu.containerName(), mpu.blobName());
 	}
 
 	@Override
@@ -1220,7 +1177,7 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 		final List<MultipartUpload> result = new ArrayList<>(this.currentMultipartUploads.values().stream()
 				.filter(v -> v.containerName().equals(container)).collect(Collectors.toList()));
 		if (result.size() > 0) {
-			logger.debug("Found active multipart uploads for container %s: %s", container, result);
+			LOGGER.debug("Found active multipart uploads for container {}: {}", container, result);
 		}
 		return result;
 	}

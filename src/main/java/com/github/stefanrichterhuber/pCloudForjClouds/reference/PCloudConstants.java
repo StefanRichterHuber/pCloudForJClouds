@@ -12,6 +12,17 @@ public class PCloudConstants {
 	 */
 	public static final String PROPERTY_CLIENT_SECRET = "jclouds.pcloud.clientsecret";
 
+	
+	/**
+	 * Is support for user-defined metadata active?
+	 */
+	public static final String PROPERTY_USERMETADATA_ACTIVE = "jclouds.pcloud.usermetadata.active";
+	
+	/**
+	 * Folder within the {@link #PROPERTY_BASEDIR} to store the user defined metatdata
+	 */
+	public static final String PROPERTY_USERMETADATA_FOLDER = "jclouds.pcloud.usermetadata.folder";
+	
 	private PCloudConstants() {
 		throw new AssertionError("intentionally unimplemented");
 	}
