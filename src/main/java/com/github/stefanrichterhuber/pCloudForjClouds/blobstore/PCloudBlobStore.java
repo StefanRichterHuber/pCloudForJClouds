@@ -6,6 +6,9 @@ import static com.google.common.collect.Sets.newTreeSet;
 import static com.google.common.io.BaseEncoding.base16;
 
 import java.io.IOException;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -444,8 +447,13 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 	 * @return {@link DataSource}.
 	 * @throws IOException
 	 */
-	private static DataSource dataSourceFromBlob(Blob blob) throws IOException {
-		return new BlobDataSource(blob);
+	private static BlobDataSource dataSourceFromBlob(Blob blob) throws IOException {
+		try {
+			final MessageDigest md = MessageDigest.getInstance("MD5");
+			return new BlobDataSource(blob, md);
+		} catch (NoSuchAlgorithmException e) {
+			throw new IOException(e);
+		}
 	}
 
 	/**
@@ -904,11 +912,11 @@ public final class PCloudBlobStore extends AbstractBlobStore implements BlobStor
 			// Check if parent folder exists
 			final RemoteFolder targetFolder = assureParentFolder(rootDir);
 
-			final DataSource ds = dataSourceFromBlob(blob);
+			final BlobDataSource ds = dataSourceFromBlob(blob);
 			final Call<RemoteFile> createdFile = this.getApiClient().createFile(targetFolder, name, ds,
 					blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE);
 			RemoteFile remoteFile = createdFile.execute();
-			return remoteFile.hash();
+			return ds.hash();
 		} catch (IOException | ApiError e) {
 			throw new PCloudBlobStoreException(e);
 		}

@@ -68,7 +68,7 @@ public class S3ProxyTest {
 		 * AWS client expects MD5 hash while pcloud delivers sha hashes, so disable MD5
 		 * validation
 		 */
-		System.setProperty("com.amazonaws.services.s3.disablePutObjectMD5Validation", "true");
+		// System.setProperty("com.amazonaws.services.s3.disablePutObjectMD5Validation", "true");
 		System.setProperty("com.amazonaws.services.s3.disableGetObjectMD5Validation", "true");
 
 		s3Proxy = S3Proxy.builder() //
