@@ -3,13 +3,11 @@
 	<groupId>eu.stefanhuber</groupId>
 	<artifactId>pcloud-s3proxy</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<java.version>17</java.version>
-		<guice.version>5.0.1</guice.version>
+		<guice.version>5.1.0</guice.version>
 	</properties>
-
 	<dependencies>
 		<dependency>
 			<groupId>org.gaul</groupId>
@@ -46,8 +44,6 @@
 			<artifactId>guice-assistedinject</artifactId>
 			<version>${guice.version}</version>
 		</dependency>
-
-
 		<!-- https://mvnrepository.com/artifact/com.amazonaws/aws-java-sdk-s3 -->
 		<dependency>
 			<groupId>com.amazonaws</groupId>
@@ -61,7 +57,6 @@
 			<version>4.5.13</version>
 			<scope>test</scope>
 		</dependency>
-
 		<!-- https://mvnrepository.com/artifact/junit/junit -->
 		<dependency>
 			<groupId>junit</groupId>
@@ -69,9 +64,7 @@
 			<version>4.13.2</version>
 			<scope>test</scope>
 		</dependency>
-
 	</dependencies>
-
 	<build>
 		<plugins>
 			<plugin>
@@ -86,7 +79,6 @@
 					</compilerArgs>
 				</configuration>
 			</plugin>
-
 			<!-- Not possible to simply use maven assembly plugin to generate fat 
 				executable jar, because the SPI definitions for org.jclouds.apis.ApiMetadata 
 				for the pcloud extension are overwritten by the one from the jars copied 

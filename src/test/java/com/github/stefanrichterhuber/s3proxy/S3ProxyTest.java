@@ -33,6 +33,7 @@ import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.internal.SkipMd5CheckStrategy;
 import com.amazonaws.services.s3.model.CompleteMultipartUploadRequest;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.InitiateMultipartUploadRequest;
@@ -50,162 +51,162 @@ import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.common.base.Charsets;
 
 public class S3ProxyTest {
-	private final static Logger LOGGER = LoggerFactory.getLogger(S3ProxyTest.class);
+    private final static Logger LOGGER = LoggerFactory.getLogger(S3ProxyTest.class);
 
-	private AmazonS3 s3Client;
-	
-	private S3Proxy s3Proxy;
+    private AmazonS3 s3Client;
 
-	private static final List<String> CONTENT_LINES = Arrays.asList("O rose, thou art sick!\r\n",
-			"The invisible worm,\r\n", "That flies in the night,\r\n", "In the howling storm.\r\n",
-			"Has found out thy bed\r\n", "Of crimson joy,\r\n", "And his dark secret love\r\n",
-			"Does thy life destroy.");
-	private static final String CONTENT = CONTENT_LINES.stream().collect(Collectors.joining());
-	private static final byte[] CONTENT_BYTES = CONTENT.getBytes(Charsets.UTF_8);
+    private S3Proxy s3Proxy;
 
-	@Before
-	public void setup() throws Exception {
+    private static final List<String> CONTENT_LINES = Arrays.asList("O rose, thou art sick!\r\n",
+            "The invisible worm,\r\n", "That flies in the night,\r\n", "In the howling storm.\r\n",
+            "Has found out thy bed\r\n", "Of crimson joy,\r\n", "And his dark secret love\r\n",
+            "Does thy life destroy.");
+    private static final String CONTENT = CONTENT_LINES.stream().collect(Collectors.joining());
+    private static final byte[] CONTENT_BYTES = CONTENT.getBytes(Charsets.UTF_8);
 
-		/**
-		 * AWS client expects MD5 hash while pcloud delivers sha hashes, so disable MD5
-		 * validation
-		 */
-		System.setProperty("com.amazonaws.services.s3.disablePutObjectMD5Validation", "true");
-		System.setProperty("com.amazonaws.services.s3.disableGetObjectMD5Validation", "true");
+    @Before
+    public void setup() throws Exception {
 
-		s3Proxy = S3Proxy.builder() //
-				.endpoint(URI.create("http://127.0.0.1:8080")) //
-				.awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "access", "secret") //
-				.build();
+        /**
+         * AWS client expects MD5 hash while pcloud delivers sha hashes, so disable MD5
+         * validation
+         */
+        System.setProperty(SkipMd5CheckStrategy.DISABLE_PUT_OBJECT_MD5_VALIDATION_PROPERTY, "true");
+        System.setProperty(SkipMd5CheckStrategy.DISABLE_GET_OBJECT_MD5_VALIDATION_PROPERTY, "true");
 
-		Properties properties = new Properties();
-		properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
+        s3Proxy = S3Proxy.builder() //
+                .endpoint(URI.create("http://127.0.0.1:8080")) //
+                .awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "access", "secret") //
+                .build();
 
-		s3Proxy.setBlobStoreLocator(new DynamicPCloudBlobStoreLocator(properties));
-		s3Proxy.start();
-		while (!s3Proxy.getState().equals(AbstractLifeCycle.STARTED)) {
-			Thread.sleep(1);
-		}
+        Properties properties = new Properties();
+        properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
 
-		s3Client = AmazonS3ClientBuilder.standard().withPathStyleAccessEnabled(true)
-				.withCredentials(new AWSStaticCredentialsProvider(
-						new BasicAWSCredentials(System.getenv("PCLOUD_TOKEN"), System.getenv("PCLOUD_TOKEN"))))
-				.withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080",
-						Regions.US_EAST_1.getName()))
-				.build();
+        s3Proxy.setBlobStoreLocator(new DynamicPCloudBlobStoreLocator(properties));
+        s3Proxy.start();
+        while (!s3Proxy.getState().equals(AbstractLifeCycle.STARTED)) {
+            Thread.sleep(1);
+        }
 
-	}
-	
-	@After
-	public void close() throws Exception {
-		this.s3Client.shutdown();
-		this.s3Proxy.stop();
-	}
-	
-	@Test
-	public void shouldList() {
-		String bucket = UUID.randomUUID().toString();
+        s3Client = AmazonS3ClientBuilder.standard().withPathStyleAccessEnabled(true)
+                .withCredentials(new AWSStaticCredentialsProvider(
+                        new BasicAWSCredentials(System.getenv("PCLOUD_TOKEN"), System.getenv("PCLOUD_TOKEN"))))
+                .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080",
+                        Regions.US_EAST_1.getName()))
+                .build();
 
-		s3Client.createBucket(bucket);
-		
-		for(char i = 'a'; i<='j'; i++) {
-			ObjectMetadata om = new ObjectMetadata();
-			om.setContentLength(CONTENT_BYTES.length);
-			String key = i + "blob";
-			s3Client.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(CONTENT_BYTES), om));
-		}
-		
-		
-		ObjectListing objectListing1 = s3Client.listObjects(new ListObjectsRequest().withBucketName(bucket).withMaxKeys(5));
-		List<S3ObjectSummary> objectSummaries1 = objectListing1.getObjectSummaries();
-		assertFalse(objectSummaries1.isEmpty());
-		assertEquals(5, objectSummaries1.size());
-		assertNotNull(objectListing1.getNextMarker());
-		
-		
-		ObjectListing objectListing2 = s3Client.listObjects(new ListObjectsRequest().withBucketName(bucket).withMaxKeys(5).withMarker(objectListing1.getNextMarker()));
-		List<S3ObjectSummary> objectSummaries2 = objectListing2.getObjectSummaries();
-		assertFalse(objectSummaries2.isEmpty());
-		assertEquals(5, objectSummaries2.size());
-		
-		// Check if there are no overlaps
-		List<String> r1 = objectSummaries1.stream().map(os -> os.getKey()).collect(Collectors.toList());
-		List<String> r2 = objectSummaries2.stream().map(os -> os.getKey()).collect(Collectors.toList());
-		
-		for(String r: r1) {
-			assertFalse(r2.contains(r));
-		}
-		
-		s3Client.deleteBucket(bucket);
-	}
+    }
 
-	@Test
-	public void shouldPutAndGetContent() throws IOException {
-		Map<String, String> md = new HashMap<>();
-		md.put("Usermetadata1", "user meta data value1");
-		String bucket = UUID.randomUUID().toString();
-		String key = UUID.randomUUID().toString();
+    @After
+    public void close() throws Exception {
+        this.s3Client.shutdown();
+        this.s3Proxy.stop();
+    }
 
-		s3Client.createBucket(bucket);
+    @Test
+    public void shouldList() {
+        String bucket = UUID.randomUUID().toString();
 
-		// Upload
-		ObjectMetadata om = new ObjectMetadata();
-		om.setUserMetadata(md);
-		om.setContentLength(CONTENT_BYTES.length);
-		s3Client.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(CONTENT_BYTES), om));
+        s3Client.createBucket(bucket);
 
-		// Download and check content
-		S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));
-		try (InputStream inputStream = s3Object.getObjectContent()) {
-			byte[] resultArray = IOUtils.toByteArray(inputStream);
-			assertEquals(CONTENT, new String(resultArray, Charsets.UTF_8));
-		}
-		assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
+        for (char i = 'a'; i <= 'j'; i++) {
+            ObjectMetadata om = new ObjectMetadata();
+            om.setContentLength(CONTENT_BYTES.length);
+            String key = i + "blob";
+            s3Client.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(CONTENT_BYTES), om));
+        }
 
-		s3Client.deleteBucket(bucket);
-	}
+        ObjectListing objectListing1 = s3Client
+                .listObjects(new ListObjectsRequest().withBucketName(bucket).withMaxKeys(5));
+        List<S3ObjectSummary> objectSummaries1 = objectListing1.getObjectSummaries();
+        assertFalse(objectSummaries1.isEmpty());
+        assertEquals(5, objectSummaries1.size());
+        assertNotNull(objectListing1.getNextMarker());
 
-	@Test
-	public void shouldDoS3Multipart() throws Exception {
-		String bucket = UUID.randomUUID().toString();
-		String key = UUID.randomUUID().toString();
-		Map<String, String> md = new HashMap<>();
-		md.put("Usermetadata1", "user meta data value1");
+        ObjectListing objectListing2 = s3Client.listObjects(new ListObjectsRequest().withBucketName(bucket)
+                .withMaxKeys(5).withMarker(objectListing1.getNextMarker()));
+        List<S3ObjectSummary> objectSummaries2 = objectListing2.getObjectSummaries();
+        assertFalse(objectSummaries2.isEmpty());
+        assertEquals(5, objectSummaries2.size());
 
-		s3Client.createBucket(bucket);
+        // Check if there are no overlaps
+        List<String> r1 = objectSummaries1.stream().map(os -> os.getKey()).collect(Collectors.toList());
+        List<String> r2 = objectSummaries2.stream().map(os -> os.getKey()).collect(Collectors.toList());
 
-		LOGGER.info("Uploading to key {} to bucket", key, bucket);
+        for (String r : r1) {
+            assertFalse(r2.contains(r));
+        }
 
-		ObjectMetadata omd = new ObjectMetadata();
-		omd.setUserMetadata(md);
-		InitiateMultipartUploadResult initiateMultipartUpload = s3Client
-				.initiateMultipartUpload(new InitiateMultipartUploadRequest(bucket, key, omd) //
-						.withObjectMetadata(omd));
+        s3Client.deleteBucket(bucket);
+    }
 
-		List<PartETag> partEtags = new ArrayList<>();
-		for (int i = 0; i < CONTENT_LINES.size(); i++) {
+    @Test
+    public void shouldPutAndGetContent() throws IOException {
+        Map<String, String> md = new HashMap<>();
+        md.put("Usermetadata1", "user meta data value1");
+        String bucket = UUID.randomUUID().toString();
+        String key = UUID.randomUUID().toString();
 
-			UploadPartResult part = s3Client.uploadPart(new UploadPartRequest() //
-					.withBucketName(bucket) //
-					.withKey("key" + i).withUploadId(initiateMultipartUpload.getUploadId()) //
-					.withInputStream(new ByteArrayInputStream(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8))) //
-					.withPartSize(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8).length).withPartNumber(i + 1));
+        s3Client.createBucket(bucket);
 
-			partEtags.add(part.getPartETag());
-		}
+        // Upload
+        ObjectMetadata om = new ObjectMetadata();
+        om.setUserMetadata(md);
+        om.setContentLength(CONTENT_BYTES.length);
+        s3Client.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(CONTENT_BYTES), om));
 
-		s3Client.completeMultipartUpload(
-				new CompleteMultipartUploadRequest().withUploadId(initiateMultipartUpload.getUploadId())
-						.withBucketName(bucket).withKey("final").withPartETags(partEtags));
+        // Download and check content
+        S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));
+        try (InputStream inputStream = s3Object.getObjectContent()) {
+            byte[] resultArray = IOUtils.toByteArray(inputStream);
+            assertEquals(CONTENT, new String(resultArray, Charsets.UTF_8));
+        }
+        assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
 
-		// Download and check
-		S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));
-		try (InputStream inputStream = s3Object.getObjectContent()) {
-			byte[] resultArray = IOUtils.toByteArray(inputStream);
-			assertEquals(CONTENT, new String(resultArray, Charsets.UTF_8));
-		}
-		assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
+        s3Client.deleteBucket(bucket);
+    }
 
-		s3Client.deleteBucket(bucket);
-	}
+    @Test
+    public void shouldDoS3Multipart() throws Exception {
+        String bucket = UUID.randomUUID().toString();
+        String key = UUID.randomUUID().toString();
+        Map<String, String> md = new HashMap<>();
+        md.put("Usermetadata1", "user meta data value1");
+
+        s3Client.createBucket(bucket);
+
+        LOGGER.info("Uploading to key {} to bucket", key, bucket);
+
+        ObjectMetadata omd = new ObjectMetadata();
+        omd.setUserMetadata(md);
+        InitiateMultipartUploadResult initiateMultipartUpload = s3Client
+                .initiateMultipartUpload(new InitiateMultipartUploadRequest(bucket, key, omd) //
+                        .withObjectMetadata(omd));
+
+        List<PartETag> partEtags = new ArrayList<>();
+        for (int i = 0; i < CONTENT_LINES.size(); i++) {
+
+            UploadPartResult part = s3Client.uploadPart(new UploadPartRequest() //
+                    .withBucketName(bucket) //
+                    .withKey("key" + i).withUploadId(initiateMultipartUpload.getUploadId()) //
+                    .withInputStream(new ByteArrayInputStream(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8))) //
+                    .withPartSize(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8).length).withPartNumber(i + 1));
+
+            partEtags.add(part.getPartETag());
+        }
+
+        s3Client.completeMultipartUpload(
+                new CompleteMultipartUploadRequest().withUploadId(initiateMultipartUpload.getUploadId())
+                        .withBucketName(bucket).withKey("final").withPartETags(partEtags));
+
+        // Download and check
+        S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));
+        try (InputStream inputStream = s3Object.getObjectContent()) {
+            byte[] resultArray = IOUtils.toByteArray(inputStream);
+            assertEquals(CONTENT, new String(resultArray, Charsets.UTF_8));
+        }
+        assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
+
+        s3Client.deleteBucket(bucket);
+    }
 }
