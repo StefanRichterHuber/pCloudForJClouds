@@ -9,12 +9,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
-import java.security.DigestInputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -24,6 +22,7 @@ import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
 
+import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,9 +43,6 @@ import com.pcloud.sdk.RemoteFolder;
 import com.pcloud.sdk.UploadOptions;
 
 public class MetadataStrategyImpl implements MetadataStrategy {
-    @SuppressWarnings("deprecation")
-    private static final byte[] EMPTY_MD5 = Hashing.md5().hashBytes(new byte[0]).asBytes();
-
     private static final Logger LOGGER = LoggerFactory.getLogger(MetadataStrategyImpl.class);
 
     private static final String SEPARATOR = "/";
@@ -170,7 +166,10 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                                             .thenComposeAsync(bm -> this.put(container, key, v).thenApply(n -> bm));
                                 }
                             }
-                            return CompletableFuture.completedFuture(EMPTY_METADATA);
+                            return CompletableFuture
+                                    .completedFuture(new ExternalBlobMetadata(
+                                            BlobHashes.empty().withBuildin(rf != null ? rf.hash() : null),
+                                            v.customMetadata()));
                         });
                     })
                     // If something bad happens during the previous block, just return empty
@@ -209,30 +208,19 @@ public class MetadataStrategyImpl implements MetadataStrategy {
     private CompletableFuture<BlobHashes> calculateChecksumFromRemoteFile(RemoteFile rf) {
         return CompletableFuture.supplyAsync(() -> {
             if (rf != null && rf.isFile() && rf.size() > 0) {
-                try (InputStream src = new BufferedInputStream(rf.byteStream());
-                        DigestInputStream sh256digest = new DigestInputStream(src,
-                                MessageDigest.getInstance("SHA-256")); //
-                        DigestInputStream sh1digest = new DigestInputStream(sh256digest,
-                                MessageDigest.getInstance("SHA-1")); //
-                        DigestInputStream md5digest = new DigestInputStream(sh1digest,
-                                MessageDigest.getInstance("MD5")); //
+                final BlobHashes.Builder hashBuilder = new BlobHashes.Builder();
 
-                ) {
-
-                    while (md5digest.available() != 0) {
-                        md5digest.read();
-                    }
-
-                    final String md5 = base16().lowerCase().encode(md5digest.getMessageDigest().digest());
-                    final String sha1 = base16().lowerCase().encode(sh1digest.getMessageDigest().digest());
-                    final String sha256 = base16().lowerCase().encode(sh256digest.getMessageDigest().digest());
-                    return new BlobHashes(md5, sha1, sha256, rf.hash());
-                } catch (NoSuchAlgorithmException | IOException e) {
+                // Copies the bytes from the source to a nothing, just to fill the hashes
+                try (OutputStream os = OutputStream.nullOutputStream();
+                        InputStream src = hashBuilder.wrap(new BufferedInputStream(rf.byteStream()))) {
+                    IOUtils.copyLarge(src, os);
+                    final BlobHashes blobHashes = hashBuilder.toBlobHashes(rf.hash());
+                    return blobHashes;
+                } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
             } else {
-                final String md5 = base16().lowerCase().encode(EMPTY_MD5);
-                return new BlobHashes(md5, null, null, rf != null ? rf.hash() : null);
+                return BlobHashes.empty().withBuildin(rf != null ? rf.hash() : null);
             }
         });
     }

@@ -1208,9 +1208,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             PCloudMultipartUpload upload = this.multipartUploadFactory.create(targetFolder.folderId(), container, name,
                     uploadId, blobMetadata, options);
             upload.start();
-            // FIXME fix metadata upload => move it to the completed
-            // this.metadataStrategy.put(container, blobMetadata.getName(),
-            // blobMetadata.getUserMetadata());
             this.currentMultipartUploads.put(uploadId, upload);
             return upload;
         } catch (IOException | ApiError e) {
@@ -1222,12 +1219,16 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     public void abortMultipartUpload(MultipartUpload mpu) {
         resolveUpload(mpu).abort();
         this.currentMultipartUploads.remove(mpu.id());
-        this.metadataStrategy.delete(mpu.containerName(), mpu.blobName());
     }
 
     @Override
     public String completeMultipartUpload(MultipartUpload mpu, List<MultipartPart> parts) {
-        final String etag = resolveUpload(mpu).complete();
+        String etag;
+        try {
+            etag = resolveUpload(mpu).complete().get();
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
+        }
         this.currentMultipartUploads.remove(mpu.id());
         return etag;
     }
@@ -1235,8 +1236,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     @Override
     public MultipartPart uploadMultipartPart(MultipartUpload mpu, int partNumber, Payload payload) {
         try {
-            return resolveUpload(mpu).append(partNumber, payload);
-        } catch (IOException e) {
+            return resolveUpload(mpu).append(partNumber, payload).get();
+        } catch (IOException | InterruptedException | ExecutionException e) {
             throw new RuntimeException(e);
         }
     }

@@ -1,5 +1,8 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.reference;
 
+import java.util.Arrays;
+import java.util.List;
+
 public class PCloudConstants {
     /**
      * Specify the base directory where provider starts its file operations - must
@@ -11,6 +14,11 @@ public class PCloudConstants {
      * Client secret to authenticate user
      */
     public static final String PROPERTY_CLIENT_SECRET = "jclouds.pcloud.clientsecret";
+
+    /**
+     * Possible values for the property {@link #PROPERTY_PCLOUD_API}
+     */
+    public static final List<String> PROPERTY_PCLOUD_API_VALUES = Arrays.asList("api.pcloud.com", "eapi.pcloud.com");
 
     /**
      * API backend for pCloud. Either api.pcloud.com or eapi.pcloud.com

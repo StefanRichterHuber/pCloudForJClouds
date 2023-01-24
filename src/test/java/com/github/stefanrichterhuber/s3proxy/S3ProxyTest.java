@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -22,6 +23,7 @@ import org.eclipse.jetty.util.component.AbstractLifeCycle;
 import org.gaul.s3proxy.AuthenticationType;
 import org.gaul.s3proxy.S3Proxy;
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -33,8 +35,8 @@ import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.internal.SkipMd5CheckStrategy;
 import com.amazonaws.services.s3.model.CompleteMultipartUploadRequest;
+import com.amazonaws.services.s3.model.DeleteObjectRequest;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.InitiateMultipartUploadRequest;
 import com.amazonaws.services.s3.model.InitiateMultipartUploadResult;
@@ -66,14 +68,6 @@ public class S3ProxyTest {
 
     @Before
     public void setup() throws Exception {
-
-        /**
-         * AWS client expects MD5 hash while pcloud delivers sha hashes, so disable MD5
-         * validation
-         */
-        System.setProperty(SkipMd5CheckStrategy.DISABLE_PUT_OBJECT_MD5_VALIDATION_PROPERTY, "true");
-        System.setProperty(SkipMd5CheckStrategy.DISABLE_GET_OBJECT_MD5_VALIDATION_PROPERTY, "true");
-
         s3Proxy = S3Proxy.builder() //
                 .endpoint(URI.create("http://127.0.0.1:8080")) //
                 .awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "access", "secret") //
@@ -90,7 +84,10 @@ public class S3ProxyTest {
 
         s3Client = AmazonS3ClientBuilder.standard().withPathStyleAccessEnabled(true)
                 .withCredentials(new AWSStaticCredentialsProvider(
-                        new BasicAWSCredentials(System.getenv("PCLOUD_TOKEN"), System.getenv("PCLOUD_TOKEN"))))
+                        // User ID and secretkey must be the same: The pCloud secret key
+                        new BasicAWSCredentials(System.getenv("PCLOUD_TOKEN"),
+                                System.getenv("PCLOUD_TOKEN"))))
+                // Region does not matter here
                 .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080",
                         Regions.US_EAST_1.getName()))
                 .build();
@@ -137,11 +134,18 @@ public class S3ProxyTest {
             assertFalse(r2.contains(r));
         }
 
+        // Remove all content of the bucket
+        for (char i = 'a'; i <= 'j'; i++) {
+            ObjectMetadata om = new ObjectMetadata();
+            om.setContentLength(CONTENT_BYTES.length);
+            String key = i + "blob";
+            s3Client.deleteObject(new DeleteObjectRequest(bucket, key));
+        }
         s3Client.deleteBucket(bucket);
     }
 
     @Test
-    public void shouldPutAndGetContent() throws IOException {
+    public void shouldPutAndGetContent() throws IOException, InterruptedException {
         Map<String, String> md = new HashMap<>();
         md.put("Usermetadata1", "user meta data value1");
         String bucket = UUID.randomUUID().toString();
@@ -163,11 +167,28 @@ public class S3ProxyTest {
         }
         assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
 
+        // Remove all content of the bucket
+        s3Client.deleteObject(new DeleteObjectRequest(bucket, key));
         s3Client.deleteBucket(bucket);
     }
 
     @Test
     public void shouldDoS3Multipart() throws Exception {
+        // Create 8 parts with 6M (must be at least 5M) of random content each - yeah
+        // its
+        // stupid, but it works... :/
+        List<byte[]> contents = new ArrayList<>();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(8 * 6_000_000);
+        for (int i = 0; i < 8; i++) {
+            byte[] content = new byte[6_000_000];
+            for (int j = 0; j < 6_000_000; j++) {
+                content[j] = (byte) (Math.random() * 255.0);
+            }
+            baos.write(content);
+            contents.add(content);
+        }
+        byte[] content = baos.toByteArray();
+
         String bucket = UUID.randomUUID().toString();
         String key = UUID.randomUUID().toString();
         Map<String, String> md = new HashMap<>();
@@ -184,13 +205,13 @@ public class S3ProxyTest {
                         .withObjectMetadata(omd));
 
         List<PartETag> partEtags = new ArrayList<>();
-        for (int i = 0; i < CONTENT_LINES.size(); i++) {
+        for (int i = 0; i < contents.size(); i++) {
 
             UploadPartResult part = s3Client.uploadPart(new UploadPartRequest() //
                     .withBucketName(bucket) //
                     .withKey("key" + i).withUploadId(initiateMultipartUpload.getUploadId()) //
-                    .withInputStream(new ByteArrayInputStream(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8))) //
-                    .withPartSize(CONTENT_LINES.get(i).getBytes(Charsets.UTF_8).length).withPartNumber(i + 1));
+                    .withInputStream(new ByteArrayInputStream(contents.get(i))) //
+                    .withPartSize(contents.get(i).length).withPartNumber(i + 1));
 
             partEtags.add(part.getPartETag());
         }
@@ -203,10 +224,12 @@ public class S3ProxyTest {
         S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));
         try (InputStream inputStream = s3Object.getObjectContent()) {
             byte[] resultArray = IOUtils.toByteArray(inputStream);
-            assertEquals(CONTENT, new String(resultArray, Charsets.UTF_8));
+            assertEquals(content.length, resultArray.length);
+            Assert.assertArrayEquals(content, resultArray);
         }
         assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
 
+        s3Client.deleteObject(new DeleteObjectRequest(bucket, key));
         s3Client.deleteBucket(bucket);
     }
 }
