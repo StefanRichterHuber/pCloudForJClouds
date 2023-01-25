@@ -55,4 +55,34 @@ public enum PCloudError {
         }
         return UNKNOWN;
     }
+
+    /**
+     * Checks if the {@link ApiError} is one of
+     * {@link #DIRECTORY_DOES_NOT_EXIST}, {@link #FILE_NOT_FOUND} or
+     * {@link #FILE_OR_FOLDER_NOT_FOUND}.
+     * 
+     * @param pCloudError
+     * @return
+     */
+    public static boolean isEntryNotFound(ApiError e) {
+        final PCloudError pCloudError = PCloudError.parse((ApiError) e);
+        return isEntryNotFound(pCloudError);
+    }
+
+    /**
+     * Checks if the {@link PCloudError} is one of
+     * {@link #DIRECTORY_DOES_NOT_EXIST}, {@link #FILE_NOT_FOUND} or
+     * {@link #FILE_OR_FOLDER_NOT_FOUND}.
+     * 
+     * @param pCloudError
+     * @return
+     */
+    public static boolean isEntryNotFound(PCloudError pCloudError) {
+        if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
+                || pCloudError == PCloudError.FILE_NOT_FOUND
+                || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+            return true;
+        }
+        return false;
+    }
 }

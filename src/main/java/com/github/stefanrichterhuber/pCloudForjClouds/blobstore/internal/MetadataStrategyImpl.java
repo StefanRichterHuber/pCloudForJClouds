@@ -32,7 +32,6 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.stream.JsonReader;
 import com.pcloud.sdk.ApiClient;
-import com.pcloud.sdk.ApiError;
 import com.pcloud.sdk.DataSource;
 import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
@@ -132,7 +131,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                     .thenApplyAsync(this::readMetadata) //
                     // If the metadata file is not found, create an empty metadata content
                     // This triggers loading the hashes in the next block
-                    .exceptionally(e -> this.notFileFoundDefault(e, () -> EMPTY_METADATA))
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> EMPTY_METADATA))
                     .thenComposeAsync(v -> {
                         // First check if there are hashes stored at all
                         if (v.hashes() == null || !v.hashes().isValid()) {
@@ -170,7 +169,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                     })
                     // If something bad happens during the previous block, just return empty
                     // metadata.
-                    .exceptionally(e -> this.notFileFoundDefault(e, () -> EMPTY_METADATA));
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> EMPTY_METADATA));
         } else {
             return CompletableFuture.completedFuture(EMPTY_METADATA);
         }
@@ -250,36 +249,6 @@ public class MetadataStrategyImpl implements MetadataStrategy {
         }
     }
 
-    /**
-     * Utility method for exception handling, returning a default value if the
-     * requested file was not found. If the error was not a file not found error, a
-     * {@link RuntimeException} is thrown.
-     * 
-     * @param <T>
-     * @param e            {@link Throwable} to handle
-     * @param defaultValue {@link Supplier} for the default value if the file was
-     *                     not found
-     * @return Default value, or a {@link RuntimeException}.
-     */
-    private <T> T notFileFoundDefault(Throwable e, Supplier<T> defaultValue) {
-        if (e instanceof ApiError) {
-            final PCloudError pCloudError = PCloudError.parse((ApiError) e);
-            if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-                return defaultValue.get();
-            }
-        }
-        if (e.getCause() instanceof ApiError) {
-            final PCloudError pCloudError = PCloudError.parse((ApiError) e.getCause());
-            if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-                return defaultValue.get();
-            }
-        }
-        if (e instanceof RuntimeException) {
-            throw (RuntimeException) e;
-        }
-        throw new RuntimeException(e);
-    }
-
     @Override
     public CompletableFuture<Void> put(String container, String key, ExternalBlobMetadata metadata) {
         if (this.active) {
@@ -328,7 +297,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
         if (this.active) {
             final String path = buildMetadataFilePath(container, key);
             return PCloudUtils.execute(getApiClient().deleteFile(path)) //
-                    .exceptionally(e -> notFileFoundDefault(e, () -> true)) //
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> true)) //
                     .thenAccept(
                             v -> LOGGER.debug("Successfully deleted custom metadata for blob (metadata file {}) {}{}{}",
                                     path, container, SEPARATOR, key));

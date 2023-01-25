@@ -500,16 +500,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             LOGGER.debug("Requested storage metadata for container {}: {}", container, metadata);
 
             return metadata;
-        } catch (ApiError e) {
-            final PCloudError pCloudError = PCloudError.parse(e);
-            if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
-                    || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-                LOGGER.debug("Container {} not found: {}", container, pCloudError.getCode());
-                return null;
-            }
-            throw new PCloudBlobStoreException(e);
-        } catch (IOException e) {
-            throw new PCloudBlobStoreException(e);
+        } catch (Exception e) {
+            return PCloudUtils.notFileFoundDefault(e, () -> null, PCloudBlobStoreException::new);
         }
     }
 
@@ -861,16 +853,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         try {
             final RemoteFolder remoteFolder = this.getApiClient().listFolder(this.createPath(rootDir)).execute();
             return remoteFolder.children().stream().anyMatch(re -> re.name().equals(name));
-        } catch (ApiError e) {
-            final PCloudError pCloudError = PCloudError.parse(e);
-            if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
-                    || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-                LOGGER.debug("Blob {}/{} not found: {}", container, key, pCloudError.getCode());
-                return false;
-            }
-            throw new PCloudBlobStoreException(e);
-        } catch (IOException e) {
-            throw new PCloudBlobStoreException(e);
+        } catch (Exception e) {
+            return PCloudUtils.notFileFoundDefault(e, () -> false,
+                    PCloudBlobStoreException::new);
         }
     }
 
@@ -979,8 +964,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             }
 
         } catch (ApiError e) {
-            final PCloudError pCloudError = PCloudError.parse(e);
-            if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+            if (PCloudError.isEntryNotFound(e)) {
                 throw new KeyNotFoundException(fromContainer, fromName,
                         "Source not found / is not a real file during copy");
             }
@@ -1086,21 +1070,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 }
             }
             return blob;
-        } catch (IOException | InterruptedException e) {
-            throw new PCloudBlobStoreException(e);
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof ApiError) {
-                final PCloudError pCloudError = PCloudError.parse((ApiError) e.getCause());
-                if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
-                    LOGGER.debug("Blob {}/{} not found: {}", container, name, pCloudError.getCode());
-                    return null;
-                }
-                if (pCloudError == PCloudError.PARENT_DIR_DOES_NOT_EXISTS) {
-                    LOGGER.warn("Parent folder of blob {}/{} does not exist", container, name);
-                    return null;
-                }
-            }
-            throw new PCloudBlobStoreException(e);
+        } catch (Exception e) {
+            return PCloudUtils.notFileFoundDefault(e, () -> null, PCloudBlobStoreException::new);
         }
     }
 

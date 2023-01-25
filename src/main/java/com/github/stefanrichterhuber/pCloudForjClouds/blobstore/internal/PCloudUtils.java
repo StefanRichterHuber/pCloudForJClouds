@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -151,9 +153,7 @@ public final class PCloudUtils {
                 return remoteFolder;
             }
         } catch (ApiError e) {
-            final PCloudError pCloudError = PCloudError.parse(e);
-            if (pCloudError == PCloudError.FILE_NOT_FOUND || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND
-                    || pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST) {
+            if (PCloudError.isEntryNotFound(e)) {
                 // Folder simply not found, continue trying the parent folder
             } else {
                 throw new RuntimeException(e);
@@ -191,5 +191,53 @@ public final class PCloudUtils {
         } catch (IOException e) {
             throw new PCloudBlobStoreException(e);
         }
+    }
+
+    /**
+     * Utility method for exception handling, returning a default value if the
+     * requested file was not found. If the error was not a file not found error, a
+     * {@link Throwable} is thrown.
+     * 
+     * @param <T>
+     * @param th               {@link Throwable} to handle
+     * @param defaultValue     {@link Supplier} for the default value if the file
+     *                         was
+     *                         not found
+     * @param exceptionFactory {@link Function} to wrap the {@link Exception} into a
+     *                         {@link Throwable}.
+     * @return Default value, or throws a {@link Throwable}.
+     */
+    public static <Th extends Throwable, T, E extends Throwable> T notFileFoundDefault(Th th,
+            Supplier<T> defaultValue,
+            Function<Th, E> exceptionFactory) throws E {
+        if (th instanceof ApiError && PCloudError.isEntryNotFound((ApiError) th)) {
+            return defaultValue.get();
+        }
+        if (th != null && th.getCause() instanceof ApiError && PCloudError.isEntryNotFound((ApiError) th.getCause())) {
+            return defaultValue.get();
+        }
+        if (th != null && th.getCause() != null && th.getCause().getCause() instanceof ApiError
+                && PCloudError.isEntryNotFound((ApiError) th.getCause().getCause())) {
+            return defaultValue.get();
+        }
+        throw exceptionFactory.apply(th);
+    }
+
+    /**
+     * Utility method for exception handling, returning a default value if the
+     * requested file was not found. If the error was not a file not found error, a
+     * {@link RuntimeException} is thrown.
+     * 
+     * @param <T>
+     * @param e            {@link Throwable} to handle
+     * @param defaultValue {@link Supplier} for the default value if the file
+     *                     was
+     *                     not found
+     * @return Default value, or throws a {@link Throwable}.
+     */
+    public static <Th extends Throwable, T> T notFileFoundDefault(Th e, Supplier<T> defaultValue)
+            throws RuntimeException {
+        return notFileFoundDefault(e, defaultValue,
+                ex -> ex instanceof RuntimeException ? (RuntimeException) ex : new RuntimeException(ex));
     }
 }
