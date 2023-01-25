@@ -12,12 +12,12 @@
 		<dependency>
 			<groupId>org.gaul</groupId>
 			<artifactId>s3proxy</artifactId>
-			<version>1.9.0</version>
+			<version>2.0.0</version>
 		</dependency>
 		<dependency>
 			<groupId>com.pcloud.sdk</groupId>
 			<artifactId>java-core</artifactId>
-			<version>1.5.0</version>
+			<version>1.8.1</version>
 		</dependency>
 		<dependency>
 			<groupId>com.squareup.okio</groupId>
@@ -117,6 +117,38 @@
 					</archive>
 				</configuration>
 			</plugin>
+			
+			<plugin>
+                <groupId>io.fabric8</groupId>
+                <artifactId>docker-maven-plugin</artifactId>
+                <version>0.40.2</version>
+                <!--
+                <executions>
+                    <execution>
+                        <id>build-and-push-docker</id>
+                        <phase>install</phase>
+                        <goals>
+                            <goal>build</goal>
+                            <goal>push</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                -->
+                <configuration>
+                    <images>
+                        <image>
+                            <name>s3proxy:latest</name>
+                            <build>
+                                <dockerFile>${project.basedir}/Dockerfile</dockerFile>
+                                <buildOptions>
+                                    <pull>true</pull>
+                                    <noCache>true</noCache>
+                                </buildOptions>
+                            </build>
+                        </image>
+                    </images>
+                </configuration>
+            </plugin>
 		</plugins>
 	</build>
 </project>

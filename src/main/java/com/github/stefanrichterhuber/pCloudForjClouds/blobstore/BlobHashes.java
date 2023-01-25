@@ -2,15 +2,22 @@ package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 
 import static com.google.common.io.BaseEncoding.base16;
 
+import java.io.BufferedInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Objects;
 
+import org.apache.commons.io.IOUtils;
+
 import com.google.common.hash.Hashing;
 import com.google.gson.annotations.Expose;
+import com.pcloud.sdk.Checksums;
+import com.pcloud.sdk.RemoteFile;
 
 public class BlobHashes {
     /**
@@ -83,12 +90,27 @@ public class BlobHashes {
 
     private static final String EMPTY_SHA256_B16 = base16().lowerCase().encode(EMPTY_SHA256);
 
+    /**
+     * Required for S3, but only delivered by US pCloud locations, not by European
+     * ones
+     */
     @Expose
     private String md5;
+    /**
+     * Optional, delivered by both pCloud locations
+     */
     @Expose
     private String sha1;
+    /**
+     * Optional, delivered by European pCloud locations, but not by US pCloud
+     * locations.
+     */
     @Expose
     private String sha256;
+
+    /**
+     * Delivered by pCloud itself
+     */
     @Expose
     private String buildin;
 
@@ -101,10 +123,10 @@ public class BlobHashes {
     }
 
     public boolean isValid() {
-        return md5() != null && !"".equals(md5())
-                && buildin() != null && !"".equals(buildin())
-                && sha1() != null && !"".equals(sha1())
-                && sha256() != null && !"".equals(sha256());
+        return md5() != null && !"".equals(md5()) // MD5 required for S3
+                && sha1() != null && !"".equals(sha1()) // SHA-1 is always available
+                && buildin() != null && !"".equals(buildin()); // builin hash is always available
+
     }
 
     public String md5() {
@@ -130,6 +152,53 @@ public class BlobHashes {
      */
     public static BlobHashes empty() {
         return new BlobHashes(EMPTY_MD5_B16, EMPTY_SHA1_B16, EMPTY_SHA256_B16, null);
+    }
+
+    /**
+     * Creates a {@link BlobHashes} object from a {@link Checksums} object
+     * 
+     * @param cs
+     * @return
+     */
+    public static BlobHashes from(Checksums cs) {
+        if (cs == null) {
+            return BlobHashes.empty();
+        }
+        final BlobHashes blobHashes = new BlobHashes(
+                cs.getMd5() != null ? base16().lowerCase().encode(cs.getMd5().toByteArray()) : null, //
+                cs.getSha1() != null ? base16().lowerCase().encode(cs.getSha1().toByteArray()) : null, //
+                cs.getSha256() != null ? base16().lowerCase().encode(cs.getSha256().toByteArray()) : null, //
+                cs.getFile() != null ? cs.getFile().hash() : null //
+        );
+        return blobHashes;
+    }
+
+    /**
+     * Creates a {@link BlobHashes} object from a {@link RemoteFile} object.
+     * Downloads the whole file to calculate the checksums. This can be a very
+     * expensive operation!
+     * 
+     * @param rf {@link RemoteFile}
+     * @return {@link BlobHashes} object
+     * @throws IOException
+     */
+    public static BlobHashes from(RemoteFile rf) throws IOException {
+        if (rf == null) {
+            return BlobHashes.empty();
+        }
+        if (!rf.isFile()) {
+            return BlobHashes.empty().withBuildin(rf.hash());
+        }
+
+        final BlobHashes.Builder hashBuilder = new BlobHashes.Builder();
+
+        // Copies the bytes from the source to a nothing, just to fill the hashes
+        try (OutputStream os = OutputStream.nullOutputStream();
+                InputStream src = hashBuilder.wrap(new BufferedInputStream(rf.byteStream()))) {
+            IOUtils.copyLarge(src, os);
+            final BlobHashes blobHashes = hashBuilder.toBlobHashes(rf.hash());
+            return blobHashes;
+        }
     }
 
     /**

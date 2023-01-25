@@ -3,13 +3,10 @@ package com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.io.BaseEncoding.base16;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
@@ -22,7 +19,6 @@ import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
 
-import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -198,7 +194,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
 
     /**
      * Completely loads the {@link RemoteFile} and calculates the necessary
-     * checksums. This is
+     * checksums. This can be
      * a very expensive operation and should only be done, if the checksums are
      * missing.
      * 
@@ -206,23 +202,31 @@ public class MetadataStrategyImpl implements MetadataStrategy {
      * @return {@link BlobHashes} calculated
      */
     private CompletableFuture<BlobHashes> calculateChecksumFromRemoteFile(RemoteFile rf) {
-        return CompletableFuture.supplyAsync(() -> {
-            if (rf != null && rf.isFile() && rf.size() > 0) {
-                final BlobHashes.Builder hashBuilder = new BlobHashes.Builder();
-
-                // Copies the bytes from the source to a nothing, just to fill the hashes
-                try (OutputStream os = OutputStream.nullOutputStream();
-                        InputStream src = hashBuilder.wrap(new BufferedInputStream(rf.byteStream()))) {
-                    IOUtils.copyLarge(src, os);
-                    final BlobHashes blobHashes = hashBuilder.toBlobHashes(rf.hash());
-                    return blobHashes;
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
+        if (rf != null && rf.isFile()) {
+            return PCloudUtils.execute(this.apiClient.getChecksums(rf.fileId())).thenCompose(cs -> {
+                // Check if the checksums delivers the required MD5 checksum (not available for
+                // European accounts). If yes we are done.
+                // Otherwise we have to download the file to calculate the checksums
+                if (cs.getMd5() != null) {
+                    LOGGER.debug("pCloud checksum delivered the required MD5 checksums");
+                    final BlobHashes blobHashes = BlobHashes.from(cs).withBuildin(rf.hash());
+                    return CompletableFuture.completedFuture(blobHashes);
+                } else {
+                    return CompletableFuture.supplyAsync(() -> {
+                        LOGGER.warn(
+                                "pCloud checksum does not give the required MD5 checksum. We have to download the file and calculate checksums ourselves :/");
+                        try {
+                            BlobHashes blobHashes = BlobHashes.from(rf);
+                            return blobHashes;
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
                 }
-            } else {
-                return BlobHashes.empty().withBuildin(rf != null ? rf.hash() : null);
-            }
-        });
+            });
+        } else {
+            return CompletableFuture.completedFuture(BlobHashes.empty().withBuildin(rf != null ? rf.hash() : null));
+        }
     }
 
     /**
