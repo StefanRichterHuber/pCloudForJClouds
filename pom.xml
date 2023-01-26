@@ -99,6 +99,7 @@
 							<outputDirectory>
 								${project.build.directory}/libs
 							</outputDirectory>
+							<includeScope>runtime</includeScope>
 						</configuration>
 					</execution>
 				</executions>
@@ -137,7 +138,7 @@
                 <configuration>
                     <images>
                         <image>
-                            <name>s3proxy:latest</name>
+                            <name>${project.artifactId}:${project.version}}</name>
                             <build>
                                 <dockerFile>${project.basedir}/Dockerfile</dockerFile>
                                 <buildOptions>

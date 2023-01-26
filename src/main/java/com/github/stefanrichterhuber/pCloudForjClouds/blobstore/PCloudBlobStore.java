@@ -437,10 +437,10 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             final String key = parentFolder != null ? parentFolder + entry.name()
                     : entry.name() + (entry.isFolder() ? SEPARATOR : "");
             // Only fetch custom metadata if detailed metadata is requested.
-            final ExternalBlobMetadata metadata = options.isDetailed()
-                    ? this.metadataStrategy.get(container, key).exceptionally(e -> MetadataStrategy.EMPTY_METADATA)
-                            .get()
-                    : MetadataStrategy.EMPTY_METADATA;
+            final ExternalBlobMetadata metadata = this.metadataStrategy.get(container, key)
+                    .exceptionally(e -> MetadataStrategy.EMPTY_METADATA)
+                    .get();
+
             if (matchesOptions(key, entry, options)) {
                 if (entry.isFile()) {
                     final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile(),
