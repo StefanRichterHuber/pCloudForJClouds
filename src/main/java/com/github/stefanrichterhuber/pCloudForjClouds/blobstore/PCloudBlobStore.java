@@ -885,7 +885,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             final RemoteFile uploadedFiled = fileRequest.get();
 
             // Then write metadata
-            final ExternalBlobMetadata md = new ExternalBlobMetadata(
+            final ExternalBlobMetadata md = new ExternalBlobMetadata(container, blob.getMetadata().getName(),
                     ds.getHashes().withBuildin(uploadedFiled.hash()),
                     blob.getMetadata().getUserMetadata());
             final CompletableFuture<Void> metadataRequest = this.metadataStrategy.put(container,

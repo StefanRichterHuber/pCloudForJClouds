@@ -293,7 +293,8 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                     LOGGER.debug("Received the final checksum from the backend: {}", buildinHash);
                     // Upload metadata
                     BlobHashes hashes = this.hashBuilder.toBlobHashes(buildinHash);
-                    final ExternalBlobMetadata externalBlobMetadata = new ExternalBlobMetadata(hashes,
+                    final ExternalBlobMetadata externalBlobMetadata = new ExternalBlobMetadata(this.containerName(),
+                            this.blobName(), hashes,
                             this.blobMetadata.getUserMetadata());
                     return this.metadataStrategy.put(containerName, blobName, externalBlobMetadata)
                             .thenApply(v -> hashes.md5());

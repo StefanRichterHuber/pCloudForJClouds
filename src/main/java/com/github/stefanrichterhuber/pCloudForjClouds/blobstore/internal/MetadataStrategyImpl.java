@@ -13,7 +13,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import javax.inject.Inject;
@@ -139,7 +138,8 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                                     "There is no checksum available for blob {}/{}: recalculate", container, key);
                             return this.getTargetFile(container, key)
                                     .thenComposeAsync(this::calculateChecksumFromRemoteFile)
-                                    .thenApply(hashes -> new ExternalBlobMetadata(hashes, v.customMetadata()))
+                                    .thenApply(hashes -> new ExternalBlobMetadata(container, key, hashes,
+                                            v.customMetadata()))
                                     // Save the corrected metadata
                                     .thenComposeAsync(bm -> this.put(container, key, v).thenApply(n -> bm));
                         }
@@ -156,13 +156,14 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                                             container, key);
                                     // stored hash no long valid -> recalculate
                                     return this.calculateChecksumFromRemoteFile(rf)
-                                            .thenApply(hashes -> new ExternalBlobMetadata(hashes, v.customMetadata()))
+                                            .thenApply(hashes -> new ExternalBlobMetadata(container, key, hashes,
+                                                    v.customMetadata()))
                                             // Save the corrected metadata
                                             .thenComposeAsync(bm -> this.put(container, key, v).thenApply(n -> bm));
                                 }
                             }
                             return CompletableFuture
-                                    .completedFuture(new ExternalBlobMetadata(
+                                    .completedFuture(new ExternalBlobMetadata(container, key,
                                             BlobHashes.empty().withBuildin(rf != null ? rf.hash() : null),
                                             v.customMetadata()));
                         });

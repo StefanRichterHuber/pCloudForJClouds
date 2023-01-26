@@ -13,7 +13,8 @@ public interface MetadataStrategy {
     /**
      * Empty metadata
      */
-    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, Collections.emptyMap());
+    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, null,
+            Collections.emptyMap());
 
     /**
      * Retrieves the metadata for the given blob

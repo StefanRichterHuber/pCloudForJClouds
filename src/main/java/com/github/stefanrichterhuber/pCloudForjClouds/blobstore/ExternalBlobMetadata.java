@@ -24,10 +24,24 @@ public class ExternalBlobMetadata {
     @Expose
     private Map<String, String> customMetadata;
 
-    public ExternalBlobMetadata(BlobHashes hashes, Map<String, String> customMetadata) {
+    /**
+     * Container containing the blob
+     */
+    @Expose
+    private String container;
+
+    /**
+     * Key of the blob
+     */
+    @Expose
+    private String key;
+
+    public ExternalBlobMetadata(String container, String key, BlobHashes hashes, Map<String, String> customMetadata) {
         super();
         this.hashes = hashes;
         this.customMetadata = customMetadata;
+        this.container = container;
+        this.key = key;
     }
 
     public BlobHashes hashes() {
@@ -38,9 +52,17 @@ public class ExternalBlobMetadata {
         return customMetadata;
     }
 
+    public String container() {
+        return this.container;
+    }
+
+    public String key() {
+        return this.key;
+    }
+
     @Override
     public int hashCode() {
-        return Objects.hash(customMetadata, hashes);
+        return Objects.hash(container, customMetadata, hashes, key);
     }
 
     @Override
@@ -52,12 +74,14 @@ public class ExternalBlobMetadata {
         if (getClass() != obj.getClass())
             return false;
         ExternalBlobMetadata other = (ExternalBlobMetadata) obj;
-        return Objects.equals(customMetadata, other.customMetadata) && Objects.equals(hashes, other.hashes);
+        return Objects.equals(container, other.container) && Objects.equals(customMetadata, other.customMetadata)
+                && Objects.equals(hashes, other.hashes) && Objects.equals(key, other.key);
     }
 
     @Override
     public String toString() {
-        return "ExternalBlobMetadata [hashes=" + hashes + ", customMetadata=" + customMetadata + "]";
+        return "ExternalBlobMetadata [hashes=" + hashes + ", customMetadata=" + customMetadata + ", container="
+                + container + ", key=" + key + "]";
     }
 
 }
