@@ -417,48 +417,44 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     /**
-     * Collects all {@link StorageMetadata} from the given {@link RemoteFolder} in
-     * the given container
+     * To check if files with prefix are within a folder, the folder must either
+     * match the prefix, or have a shorter key, beginning with a substring of the
+     * prefix
      * 
-     * @param container    Container containing all entries
-     * @param remoteFolder {@link RemoteFolder} to check
-     * @param options      {@link ListContainerOptions} to apply
+     * <li>prefix a/b -> folder a -> match
+     * <li>prefix a/b -> folder a/b -> match
+     * <li>prefix a/b -> folder a/b/c -> match
+     * <li>prefix a/b -> folder a/c -> no match
+     * <li>prefix a/b -> folder c -> no match
+     * <li>prefix a/b -> folder c/b -> no match
+     * 
+     * @param key
+     * @param prefix
      * @return
-     * @throws ExecutionException
-     * @throws InterruptedException
      */
-    private SortedSet<StorageMetadata> collectStorageMetadata(String container, String parentFolder,
-            final RemoteFolder remoteFolder, ListContainerOptions options)
-            throws InterruptedException, ExecutionException {
-        final SortedSet<StorageMetadata> result = new TreeSet<>();
-        for (RemoteEntry entry : remoteFolder.children()) {
-            // Files have a key like folder1/folder2/file, folders like
-            // folder1/folder2/folder/
-            final String key = parentFolder != null
-                    ? (parentFolder.endsWith(SEPARATOR) ? parentFolder : (parentFolder + SEPARATOR)) + entry.name()
-                    : entry.name() + (entry.isFolder() ? SEPARATOR : "");
-            // Only fetch custom metadata if detailed metadata is requested.
-            final ExternalBlobMetadata metadata = this.metadataStrategy.get(container, key, entry)
-                    .exceptionally(e -> MetadataStrategy.EMPTY_METADATA)
-                    .get();
-
-            if (matchesOptions(key, entry, options)) {
-                if (entry.isFile()) {
-                    final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile(),
-                            metadata);
-                    result.add(blob.getMetadata());
-                } else if (entry.isFolder()) {
-                    final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder(),
-                            metadata);
-                    result.add(blob.getMetadata());
-                }
-            }
-            if (options.isRecursive() && entry.isFolder()) {
-                result.addAll(this.collectStorageMetadata(container, key, entry.asFolder(), options));
-            }
-
+    public static boolean checkIfFolderMatchesPrefix(String key, String prefix) {
+        if (prefix == null) {
+            return true;
         }
-        return result;
+        if (key.startsWith(prefix)) {
+            return true;
+        }
+        if (prefix.contains(SEPARATOR)) {
+            List<String> prefixParts = Arrays.asList(prefix.split(SEPARATOR));
+            List<String> keyParts = Arrays.asList(key.split(SEPARATOR));
+
+            if (keyParts.size() < prefixParts.size()) {
+                for (int i = 0; i < keyParts.size(); i++) {
+                    if (!keyParts.get(i).equals(prefixParts.get(i))) {
+                        return false;
+                    }
+                }
+                return true;
+            } else {
+                return false;
+            }
+        }
+        return false;
     }
 
     /**
@@ -506,7 +502,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                             }
                         });
                 entries.add(entriesOfKey);
-            } else if (options.isRecursive() && entry.isFolder()) {
+            } else if (options.isRecursive() && entry.isFolder()
+                    && checkIfFolderMatchesPrefix(key, options.getPrefix())) {
                 final CompletableFuture<SortedSet<StorageMetadata>> entriesOfKey = collectStorageMetadataAsync(
                         container, key, entry.asFolder(), options);
                 entries.add(entriesOfKey);
@@ -543,8 +540,15 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         if (options == null || options == ListContainerOptions.NONE) {
             return true;
         }
-        if (options.getPrefix() != null && !key.startsWith(options.getPrefix())) {
-            return false;
+        if (options.getPrefix() != null) {
+            if (remoteEntry.isFile() && options.getPrefix().endsWith(SEPARATOR)) {
+                final CharSequence cleanPrefix = options.getPrefix().subSequence(0, options.getPrefix().length() - 1);
+                if (!key.equals(cleanPrefix)) {
+                    return false;
+                }
+            } else if (!key.startsWith(options.getPrefix())) {
+                return false;
+            }
         }
         if (remoteEntry.isFolder() && !options.isRecursive()) {
             return false;
@@ -934,7 +938,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         assertContainerExists(container);
         this.pCloudBlobKeyValidator.validate(blob.getMetadata().getName());
 
-        LOGGER.debug("Uploading blob {} to container {}", container, blob);
+        LOGGER.info("Uploading blob {}/{} with options {}", container, blob, options);
         try {
             if (getDirectoryBlobSuffix(blob.getMetadata().getName()) != null) {
                 return putDirectoryBlob(container, blob);
@@ -1059,6 +1063,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                     remoteFile);
             final ExternalBlobMetadata metadata = metadataRequest.get();
             final Blob blob = createBlobFromRemoteEntry(container, name, remoteFile, metadata);
+
+            LOGGER.info("Retrieving blob {}/{} with options {}", container, name, options);
 
             if (options != null && options != GetOptions.NONE) {
                 final String eTag = maybeQuoteETag(metadata.hashes().md5());
