@@ -182,7 +182,7 @@ public final class PCloudUtils {
         try {
             RemoteFolder remoteFolder = apiClient.loadFolder(folder).execute();
             if (remoteFolder != null) {
-                LOGGER.info("Required folder '{}' already exists", folder);
+                LOGGER.debug("Required folder '{}' already exists", folder);
                 return remoteFolder;
             }
         } catch (ApiError e) {

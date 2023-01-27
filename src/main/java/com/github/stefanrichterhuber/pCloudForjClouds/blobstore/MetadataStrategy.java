@@ -3,6 +3,8 @@ package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
+import com.pcloud.sdk.RemoteEntry;
+
 /**
  * Strategy to handle user defined metadata
  * 
@@ -24,6 +26,16 @@ public interface MetadataStrategy {
      * @return {@link CompletableFuture} containing the result of the operation.
      */
     CompletableFuture<ExternalBlobMetadata> get(String container, String key);
+
+    /**
+     * Retrieves the metadata for the given remote entry.
+     * 
+     * @param container Container containing the blob
+     * @param key       Key of the blob
+     * @param rf        {@link RemoteEntry} of the blob to get the metadata for.
+     * @return {@link CompletableFuture} containing the result of the operation.
+     */
+    CompletableFuture<ExternalBlobMetadata> get(String container, String key, RemoteEntry rf);
 
     /**
      * Persist some metadata for the given blob

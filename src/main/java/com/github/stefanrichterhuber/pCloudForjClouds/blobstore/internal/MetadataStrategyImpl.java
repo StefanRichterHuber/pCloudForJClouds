@@ -33,6 +33,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.stream.JsonReader;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.DataSource;
+import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
 import com.pcloud.sdk.UploadOptions;
@@ -124,7 +125,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
     }
 
     @Override
-    public CompletableFuture<ExternalBlobMetadata> get(String container, String key) {
+    public CompletableFuture<ExternalBlobMetadata> get(String container, String key, RemoteEntry rf) {
         if (this.active) {
             final String path = buildMetadataFilePath(container, key);
             return PCloudUtils.execute(this.getApiClient().loadFile(path)) //
@@ -133,50 +134,66 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                     // This triggers loading the hashes in the next block
                     .exceptionally(e -> PCloudUtils.notFileFoundDefault(e,
                             () -> new ExternalBlobMetadata(container, key, null, Collections.emptyMap())))
-                    .thenComposeAsync(v -> {
+                    .thenCompose(v -> {
+                        if (rf.isFolder()) {
+                            // Folders have no checksums, only metadata
+                            return CompletableFuture
+                                    .completedFuture(new ExternalBlobMetadata(container, key,
+                                            BlobHashes.empty(),
+                                            v.customMetadata()));
+                        }
+
                         // First check if there are hashes stored at all
                         if (v.hashes() == null || !v.hashes().isValid()) {
                             LOGGER.debug(
-                                    "There is no checksum available for blob {}/{}: recalculate", container, key);
-                            return this.getTargetFile(container, key)
-                                    .thenComposeAsync(this::calculateChecksumFromRemoteFile)
+                                    "There is no checksum available for blob {}/{}: start calculation", container, key);
+                            return this.calculateChecksumFromRemoteFile(rf)
                                     .thenApply(hashes -> new ExternalBlobMetadata(container, key, hashes,
                                             v.customMetadata()))
                                     // Save the corrected metadata
-                                    .thenComposeAsync(bm -> this.put(container, key, bm).thenApply(n -> bm));
+                                    .thenCompose(bm -> this.put(container, key, bm).thenApply(n -> bm));
                         }
 
                         // Then check if stored hashes are still valid
-                        return getTargetFile(container, key).thenComposeAsync(rf -> {
-                            if (rf != null && rf.isFile()) {
-                                if (v.hashes().buildin().equals(rf.hash())) {
-                                    // stored hash still valid
-                                    LOGGER.debug("Found metadata for file {}/{} and it is contains vaild checksums!",
-                                            container,
-                                            key);
-                                    return CompletableFuture.completedFuture(v);
-                                } else {
-                                    LOGGER.warn(
-                                            "There was a checksum available for the blob {}/{} but it is not valid anymore: recalculate",
-                                            container, key);
-                                    // stored hash no long valid -> recalculate
-                                    return this.calculateChecksumFromRemoteFile(rf)
-                                            .thenApply(hashes -> new ExternalBlobMetadata(container, key, hashes,
-                                                    v.customMetadata()))
-                                            // Save the corrected metadata
-                                            .thenComposeAsync(bm -> this.put(container, key, bm).thenApply(n -> bm));
-                                }
+                        if (rf.isFile()) {
+                            RemoteFile file = rf.asFile();
+                            if (v.hashes().buildin().equals(file.hash())) {
+                                // stored hash still valid
+                                LOGGER.debug("Found metadata for file {}/{} and it is contains vaild checksums!",
+                                        container,
+                                        key);
+                                return CompletableFuture.completedFuture(v);
+                            } else {
+                                LOGGER.warn(
+                                        "There was a checksum available for the blob {}/{} but it is not valid anymore: recalculate",
+                                        container, key);
+                                // stored hash no long valid -> recalculate
+                                return this.calculateChecksumFromRemoteFile(rf)
+                                        .thenApply(hashes -> new ExternalBlobMetadata(container, key, hashes,
+                                                v.customMetadata()))
+                                        // Save the corrected metadata
+                                        .thenCompose(bm -> this.put(container, key, bm).thenApply(n -> bm));
                             }
-                            return CompletableFuture
-                                    .completedFuture(new ExternalBlobMetadata(container, key,
-                                            BlobHashes.empty().withBuildin(rf != null ? rf.hash() : null),
-                                            v.customMetadata()));
-                        });
+                        }
+                        return CompletableFuture
+                                .completedFuture(new ExternalBlobMetadata(container, key,
+                                        BlobHashes.empty(),
+                                        v.customMetadata()));
+
                     })
                     // If something bad happens during the previous block, just return empty
                     // metadata.
                     .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> new ExternalBlobMetadata(container,
                             key, BlobHashes.empty(), Collections.emptyMap())));
+        } else {
+            return CompletableFuture.completedFuture(EMPTY_METADATA);
+        }
+    }
+
+    @Override
+    public CompletableFuture<ExternalBlobMetadata> get(String container, String key) {
+        if (this.active) {
+            return getTargetFile(container, key).thenCompose(rf -> this.get(container, key, rf));
         } else {
             return CompletableFuture.completedFuture(EMPTY_METADATA);
         }
@@ -207,25 +224,26 @@ public class MetadataStrategyImpl implements MetadataStrategy {
      * @param rf {@link RemoteFile} of the blob
      * @return {@link BlobHashes} calculated
      */
-    private CompletableFuture<BlobHashes> calculateChecksumFromRemoteFile(RemoteFile rf) {
+    private CompletableFuture<BlobHashes> calculateChecksumFromRemoteFile(RemoteEntry rf) {
         if (rf != null && rf.isFile()) {
+            RemoteFile file = rf.asFile();
             /*
              * Unfortunately apiClient.getChecksums() always returns null for md5 :/
              */
 
-            return PCloudUtils.calculateChecksum(this.apiClient, rf.fileId()).thenCompose(blobHashes -> {
+            return PCloudUtils.calculateChecksum(this.apiClient, file.fileId()).thenCompose(blobHashes -> {
                 // Check if the checksums delivers the required MD5 checksum (not available for
                 // European accounts). If yes we are done.
                 // Otherwise we have to download the file to calculate the checksums
                 if (blobHashes.md5() != null) {
-                    LOGGER.debug("pCloud checksum delivered the required MD5 checksums");
-                    return CompletableFuture.completedFuture(blobHashes.withBuildin(rf.hash()));
+                    LOGGER.debug("pCloud checksum delivered the required MD5 checksums for file {}", rf.name());
+                    return CompletableFuture.completedFuture(blobHashes.withBuildin(file.hash()));
                 } else {
                     return CompletableFuture.supplyAsync(() -> {
                         LOGGER.warn(
                                 "pCloud checksum does not give the required MD5 checksum. We have to download the file and calculate checksums ourselves :/");
                         try {
-                            return BlobHashes.from(rf);
+                            return BlobHashes.from(file);
                         } catch (IOException e) {
                             throw new RuntimeException(e);
                         }
@@ -233,7 +251,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                 }
             });
         } else {
-            return CompletableFuture.completedFuture(BlobHashes.empty().withBuildin(rf != null ? rf.hash() : null));
+            return CompletableFuture.completedFuture(BlobHashes.empty());
         }
     }
 
@@ -268,7 +286,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
 
                 final String name = buildMetadataFileName(container, key);
                 return CompletableFuture.supplyAsync(() -> writeMetadata(metadata)) //
-                        .thenComposeAsync(ds -> PCloudUtils.execute(this.getApiClient()
+                        .thenCompose(ds -> PCloudUtils.execute(this.getApiClient()
                                 .createFile(this.metadataRemoteFolder, name, ds, UploadOptions.OVERRIDE_FILE)))
                         .thenAccept(rf -> LOGGER.debug(
                                 "Successfully uploaded custom metadata for blob (metadata file {}) {}{}{}: {}", name,

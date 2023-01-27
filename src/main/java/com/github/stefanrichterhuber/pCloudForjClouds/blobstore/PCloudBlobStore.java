@@ -438,7 +438,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                     ? (parentFolder.endsWith(SEPARATOR) ? parentFolder : (parentFolder + SEPARATOR)) + entry.name()
                     : entry.name() + (entry.isFolder() ? SEPARATOR : "");
             // Only fetch custom metadata if detailed metadata is requested.
-            final ExternalBlobMetadata metadata = this.metadataStrategy.get(container, key)
+            final ExternalBlobMetadata metadata = this.metadataStrategy.get(container, key, entry)
                     .exceptionally(e -> MetadataStrategy.EMPTY_METADATA)
                     .get();
 
@@ -459,6 +459,74 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
         }
         return result;
+    }
+
+    /**
+     * Collects all {@link StorageMetadata} from the given {@link RemoteFolder} in
+     * the given container
+     * 
+     * @param container    Container containing all entries
+     * @param remoteFolder {@link RemoteFolder} to check
+     * @param options      {@link ListContainerOptions} to apply
+     * @return
+     */
+    private CompletableFuture<SortedSet<StorageMetadata>> collectStorageMetadataAsync(String container,
+            String parentFolder,
+            final RemoteFolder remoteFolder, ListContainerOptions options) {
+        final List<CompletableFuture<SortedSet<StorageMetadata>>> entries = new ArrayList<>();
+
+        for (RemoteEntry entry : remoteFolder.children()) {
+            // Files have a key like folder1/folder2/file, folders like
+            // folder1/folder2/folder/
+            final String key = parentFolder != null
+                    ? (parentFolder.endsWith(SEPARATOR) ? parentFolder : (parentFolder + SEPARATOR)) + entry.name()
+                    : entry.name() + (entry.isFolder() ? SEPARATOR : "");
+
+            if (matchesOptions(key, entry, options)) {
+                final CompletableFuture<SortedSet<StorageMetadata>> entriesOfKey = this.metadataStrategy
+                        .get(container, key, entry)
+                        .exceptionally(e -> MetadataStrategy.EMPTY_METADATA)
+                        .thenCompose(metadata -> {
+                            final SortedSet<StorageMetadata> result = new TreeSet<>();
+
+                            if (entry.isFile()) {
+                                final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFile(),
+                                        metadata);
+                                result.add(blob.getMetadata());
+                            } else if (entry.isFolder()) {
+                                final Blob blob = this.createBlobFromRemoteEntry(container, key, entry.asFolder(),
+                                        metadata);
+                                result.add(blob.getMetadata());
+                            }
+                            if (options.isRecursive() && entry.isFolder()) {
+                                return collectStorageMetadataAsync(container, key, entry.asFolder(), options)
+                                        .thenAccept(r -> result.addAll(r)).thenApply(v -> result);
+                            } else {
+                                return CompletableFuture.completedFuture(result);
+                            }
+                        });
+                entries.add(entriesOfKey);
+            } else if (options.isRecursive() && entry.isFolder()) {
+                final CompletableFuture<SortedSet<StorageMetadata>> entriesOfKey = collectStorageMetadataAsync(
+                        container, key, entry.asFolder(), options);
+                entries.add(entriesOfKey);
+            }
+        }
+
+        return CompletableFuture.allOf(entries.toArray(new CompletableFuture[entries.size()])).thenApply(v -> {
+            final SortedSet<StorageMetadata> result = new TreeSet<>();
+
+            for (var entry : entries) {
+                try {
+                    SortedSet<StorageMetadata> r = entry.get();
+                    result.addAll(r);
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            return result;
+        });
     }
 
     /**
@@ -708,7 +776,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             // Loading blobs from container
             RemoteFolder remoteFolder = this.getApiClient().listFolder(createPath(containerName), options.isRecursive())
                     .execute();
-            SortedSet<StorageMetadata> contents = collectStorageMetadata(containerName, null, remoteFolder, options);
+            SortedSet<StorageMetadata> contents = collectStorageMetadataAsync(containerName, null, remoteFolder,
+                    options).get();
 
             String marker = null;
             if (options != null && options != ListContainerOptions.NONE) {
@@ -984,9 +1053,10 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
             final CompletableFuture<RemoteFile> remoteFileRequest = PCloudUtils
                     .execute(this.getApiClient().loadFile(createPath(container, name)));
-            final CompletableFuture<ExternalBlobMetadata> metadataRequest = this.metadataStrategy.get(container, name);
 
             final RemoteFile remoteFile = remoteFileRequest.get();
+            final CompletableFuture<ExternalBlobMetadata> metadataRequest = this.metadataStrategy.get(container, name,
+                    remoteFile);
             final ExternalBlobMetadata metadata = metadataRequest.get();
             final Blob blob = createBlobFromRemoteEntry(container, name, remoteFile, metadata);
 
