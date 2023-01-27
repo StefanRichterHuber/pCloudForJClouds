@@ -434,7 +434,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         for (RemoteEntry entry : remoteFolder.children()) {
             // Files have a key like folder1/folder2/file, folders like
             // folder1/folder2/folder/
-            final String key = parentFolder != null ? parentFolder + entry.name()
+            final String key = parentFolder != null
+                    ? (parentFolder.endsWith(SEPARATOR) ? parentFolder : (parentFolder + SEPARATOR)) + entry.name()
                     : entry.name() + (entry.isFolder() ? SEPARATOR : "");
             // Only fetch custom metadata if detailed metadata is requested.
             final ExternalBlobMetadata metadata = this.metadataStrategy.get(container, key)

@@ -13,7 +13,7 @@ public interface MetadataStrategy {
     /**
      * Empty metadata
      */
-    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, null,
+    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, BlobHashes.empty(),
             Collections.emptyMap());
 
     /**

@@ -11,6 +11,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -130,7 +131,8 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                     .thenApplyAsync(this::readMetadata) //
                     // If the metadata file is not found, create an empty metadata content
                     // This triggers loading the hashes in the next block
-                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> EMPTY_METADATA))
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e,
+                            () -> new ExternalBlobMetadata(container, key, null, Collections.emptyMap())))
                     .thenComposeAsync(v -> {
                         // First check if there are hashes stored at all
                         if (v.hashes() == null || !v.hashes().isValid()) {
@@ -141,7 +143,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                                     .thenApply(hashes -> new ExternalBlobMetadata(container, key, hashes,
                                             v.customMetadata()))
                                     // Save the corrected metadata
-                                    .thenComposeAsync(bm -> this.put(container, key, v).thenApply(n -> bm));
+                                    .thenComposeAsync(bm -> this.put(container, key, bm).thenApply(n -> bm));
                         }
 
                         // Then check if stored hashes are still valid
@@ -149,6 +151,9 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                             if (rf != null && rf.isFile()) {
                                 if (v.hashes().buildin().equals(rf.hash())) {
                                     // stored hash still valid
+                                    LOGGER.debug("Found metadata for file {}/{} and it is contains vaild checksums!",
+                                            container,
+                                            key);
                                     return CompletableFuture.completedFuture(v);
                                 } else {
                                     LOGGER.warn(
@@ -159,7 +164,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                                             .thenApply(hashes -> new ExternalBlobMetadata(container, key, hashes,
                                                     v.customMetadata()))
                                             // Save the corrected metadata
-                                            .thenComposeAsync(bm -> this.put(container, key, v).thenApply(n -> bm));
+                                            .thenComposeAsync(bm -> this.put(container, key, bm).thenApply(n -> bm));
                                 }
                             }
                             return CompletableFuture
@@ -170,7 +175,8 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                     })
                     // If something bad happens during the previous block, just return empty
                     // metadata.
-                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> EMPTY_METADATA));
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> new ExternalBlobMetadata(container,
+                            key, BlobHashes.empty(), Collections.emptyMap())));
         } else {
             return CompletableFuture.completedFuture(EMPTY_METADATA);
         }
@@ -203,21 +209,23 @@ public class MetadataStrategyImpl implements MetadataStrategy {
      */
     private CompletableFuture<BlobHashes> calculateChecksumFromRemoteFile(RemoteFile rf) {
         if (rf != null && rf.isFile()) {
-            return PCloudUtils.execute(this.apiClient.getChecksums(rf.fileId())).thenCompose(cs -> {
+            /*
+             * Unfortunately apiClient.getChecksums() always returns null for md5 :/
+             */
+
+            return PCloudUtils.calculateChecksum(this.apiClient, rf.fileId()).thenCompose(blobHashes -> {
                 // Check if the checksums delivers the required MD5 checksum (not available for
                 // European accounts). If yes we are done.
                 // Otherwise we have to download the file to calculate the checksums
-                if (cs.getMd5() != null) {
+                if (blobHashes.md5() != null) {
                     LOGGER.debug("pCloud checksum delivered the required MD5 checksums");
-                    final BlobHashes blobHashes = BlobHashes.from(cs).withBuildin(rf.hash());
-                    return CompletableFuture.completedFuture(blobHashes);
+                    return CompletableFuture.completedFuture(blobHashes.withBuildin(rf.hash()));
                 } else {
                     return CompletableFuture.supplyAsync(() -> {
                         LOGGER.warn(
                                 "pCloud checksum does not give the required MD5 checksum. We have to download the file and calculate checksums ourselves :/");
                         try {
-                            BlobHashes blobHashes = BlobHashes.from(rf);
-                            return blobHashes;
+                            return BlobHashes.from(rf);
                         } catch (IOException e) {
                             throw new RuntimeException(e);
                         }

@@ -123,8 +123,41 @@ public final class PCloudUtils {
 
         var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
 
-        final HttpUrl.Builder urlBuilder = apiHost.newBuilder().addPathSegment("checksumfile") //
+        final HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
+                .addPathSegment("checksumfile") //
                 .addQueryParameter("path", filePath) //
+        ;
+
+        Request request = new Request.Builder().url(apiHost).url(urlBuilder.build()).get().build();
+
+        return execute(httpClient.newCall(request)).thenApply(resp -> {
+            try (Response response = resp) {
+                JsonReader reader = new JsonReader(
+                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
+                BlobHashes result = gson.fromJson(reader, BlobHashes.class);
+                return result;
+            }
+        });
+    }
+
+    /**
+     * Calculates the checksums of a whole file. Calculated checksums depends on the
+     * location of the pCloud store. Unfortunately no MD5 for European customers :/
+     * 
+     * @see https://docs.pcloud.com/methods/file/checksumfile.html
+     * @param apiClient {@link ApiClient} to access the pCloud backend
+     * @param fileId    ID of the file
+     * @return Checksums calculated
+     */
+    public static CompletableFuture<BlobHashes> calculateChecksum(ApiClient apiClient, long fileId) {
+        var apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
+        var httpClient = PCloudUtils.getHTTPClient(apiClient);
+
+        var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
+
+        final HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
+                .addPathSegment("checksumfile") //
+                .addQueryParameter("fileid", Long.toString(fileId)) //
         ;
 
         Request request = new Request.Builder().url(apiHost).url(urlBuilder.build()).get().build();

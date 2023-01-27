@@ -109,7 +109,7 @@ public class BlobHashes {
     private String sha256;
 
     /**
-     * Delivered by pCloud itself
+     * Delivered by pCloud itself. Only available for files. Null for folders.
      */
     @Expose
     private String buildin;
@@ -125,8 +125,7 @@ public class BlobHashes {
     public boolean isValid() {
         return md5() != null && !"".equals(md5()) // MD5 required for S3
                 && sha1() != null && !"".equals(sha1()) // SHA-1 is always available
-                && buildin() != null && !"".equals(buildin()); // builin hash is always available
-
+        ;
     }
 
     public String md5() {
