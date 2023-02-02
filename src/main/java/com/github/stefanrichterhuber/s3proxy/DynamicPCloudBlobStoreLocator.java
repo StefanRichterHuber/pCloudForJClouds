@@ -1,23 +1,19 @@
 package com.github.stefanrichterhuber.s3proxy;
 
-import java.io.IOException;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.gaul.s3proxy.BlobStoreLocator;
+import org.jclouds.Constants;
 import org.jclouds.ContextBuilder;
 import org.jclouds.blobstore.BlobStore;
 import org.jclouds.blobstore.BlobStoreContext;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudUtils;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.common.collect.Maps;
-import com.pcloud.sdk.ApiClient;
-import com.pcloud.sdk.ApiError;
-import com.pcloud.sdk.Authenticators;
-import com.pcloud.sdk.PCloudSdk;
-import com.pcloud.sdk.RemoteFolder;
 
 /**
  * This S3Proxy {@link BlobStoreLocator} dynamically creates pCloud
@@ -58,8 +54,9 @@ public class DynamicPCloudBlobStoreLocator implements BlobStoreLocator {
             properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, id);
 
             // Determine which api instance to use
-            if (!properties.containsKey(PCloudConstants.PROPERTY_PCLOUD_API)) {
-                properties.setProperty(PCloudConstants.PROPERTY_PCLOUD_API, testForAPIEndpoint(id));
+            if (!properties.containsKey(Constants.PROPERTY_ENDPOINT)) {
+                final String apiEndpoint = PCloudUtils.testForAPIEndpoint(id).orNull();
+                properties.setProperty(Constants.PROPERTY_ENDPOINT, apiEndpoint);
             }
 
             final BlobStoreContext context = ContextBuilder.newBuilder("pcloud").overrides(properties)
@@ -68,30 +65,6 @@ public class DynamicPCloudBlobStoreLocator implements BlobStoreLocator {
             return Maps.immutableEntry(id, blobStore);
         });
         return result;
-    }
-
-    /**
-     * There are different API endpoints for different accounts (see
-     * {@link PCloudConstants#PROPERTY_PCLOUD_API_VALUES}. If not pre-configured,
-     * test all possible endpoints for the correct one
-     * 
-     * @param id Oauth id of the user
-     * @return API Endpoint found.
-     */
-    protected String testForAPIEndpoint(String id) {
-        for (String pCloudHost : PCloudConstants.PROPERTY_PCLOUD_API_VALUES) {
-            ApiClient apiClient = PCloudSdk.newClientBuilder().apiHost(pCloudHost)
-                    .authenticator(Authenticators.newOAuthAuthenticator(id)).create();
-            try {
-                RemoteFolder remoteFolder = apiClient.listFolder("/").execute();
-                if (remoteFolder != null) {
-                    return pCloudHost;
-                }
-            } catch (IOException | ApiError e) {
-                // Ignore this is is possible the wrong client
-            }
-        }
-        return null;
     }
 
 }

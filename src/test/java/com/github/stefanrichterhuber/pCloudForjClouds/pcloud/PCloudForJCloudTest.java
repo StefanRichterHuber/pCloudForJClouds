@@ -12,13 +12,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.apache.commons.io.IOUtils;
+import org.jclouds.Constants;
 import org.jclouds.ContextBuilder;
 import org.jclouds.blobstore.BlobStore;
 import org.jclouds.blobstore.BlobStoreContext;
@@ -27,17 +30,20 @@ import org.jclouds.blobstore.domain.MultipartUpload;
 import org.jclouds.blobstore.domain.MutableBlobMetadata;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
-import org.jclouds.blobstore.domain.StorageType;
 import org.jclouds.blobstore.options.CopyOptions;
 import org.jclouds.blobstore.options.GetOptions;
 import org.jclouds.blobstore.options.ListContainerOptions;
 import org.jclouds.io.Payloads;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.utility.DockerImageName;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudUtils;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.common.base.Charsets;
 
@@ -49,16 +55,23 @@ public class PCloudForJCloudTest {
     private BlobStore blobStore;
     private String container;
 
+    @SuppressWarnings("rawtypes")
+    @Rule
+    public GenericContainer<?> redis = new GenericContainer(DockerImageName.parse("redis:5.0.3-alpine"))
+            .withExposedPorts(6379);
+
     @Before
     public void setup() throws InterruptedException {
+        final String token = System.getenv("PCLOUD_TOKEN");
 
         Properties properties = new Properties();
+        properties.setProperty(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING,
+                String.format("redis://%s:%d", redis.getHost(), redis.getFirstMappedPort()));
         properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
-        properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, System.getenv("PCLOUD_TOKEN"));
+        properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, token);
         properties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "test-metadata");
         // Either api.pcloud.com or eapi.pcloud.com for European accounts
-        properties.setProperty(PCloudConstants.PROPERTY_PCLOUD_API,
-                System.getenv("PCLOUD_HOST"));
+        properties.setProperty(Constants.PROPERTY_ENDPOINT, PCloudUtils.testForAPIEndpoint(token).orNull());
 
         BlobStoreContext context = ContextBuilder.newBuilder("pcloud").overrides(properties)
                 .build(BlobStoreContext.class);
@@ -97,34 +110,6 @@ public class PCloudForJCloudTest {
     }
 
     @Test
-    public void shouldCreateFoldersForBlob() throws InterruptedException {
-        String blobName = "f1/f2/f3/f4/" + UUID.randomUUID().toString() + ".txt";
-        String blobContent = UUID.randomUUID().toString();
-
-        Blob contentBlob = blobStore.blobBuilder(blobName) //
-                .payload(blobContent) //
-                .build();
-        blobStore.putBlob(container, contentBlob);
-        Thread.sleep(TIME_TO_WAIT);
-        // Check the blob
-        assertTrue(blobStore.blobExists(container, blobName));
-
-        // Also check if one can fetch the parent folder
-        {
-            Blob folderBlob = blobStore.getBlob(container, "f1/f2/f3/f4/");
-            assertNotNull(folderBlob);
-            assertEquals(StorageType.FOLDER, folderBlob.getMetadata().getType());
-        }
-        // Check if folder is fetched without proper folder marker
-        {
-            Blob folderBlob = blobStore.getBlob(container, "f1/f2/f3");
-            assertNotNull(folderBlob);
-            assertEquals(StorageType.FOLDER, folderBlob.getMetadata().getType());
-        }
-
-    }
-
-    @Test
     public void shouldDeleteAFullContainer() throws InterruptedException {
         String b1Name = UUID.randomUUID().toString();
         String b2Name = UUID.randomUUID().toString();
@@ -146,33 +131,6 @@ public class PCloudForJCloudTest {
         assertTrue(blobStore.blobExists(container, b1Name));
         assertTrue(blobStore.blobExists(container, b2Name));
         assertTrue(blobStore.blobExists(container, b3Name));
-
-    }
-
-    @Test
-    public void shouldCreateDirectoryInContainer() throws InterruptedException {
-        String folder = UUID.randomUUID().toString() + "/";
-        String blobName = UUID.randomUUID().toString() + ".txt";
-        String blobContent = UUID.randomUUID().toString();
-
-        // Create test folder
-        Blob folderBlob = blobStore //
-                .blobBuilder(folder) //
-                .build();
-        blobStore.putBlob(container, folderBlob);
-        Thread.sleep(TIME_TO_WAIT);
-        // Check if test folder is present
-        assertTrue(blobStore.blobExists(container, folder));
-
-        // Insert file into test folder
-        Blob contentBlob = blobStore.blobBuilder(folder + blobName) //
-                .payload(blobContent) //
-                .build();
-
-        blobStore.putBlob(container, contentBlob);
-        Thread.sleep(TIME_TO_WAIT);
-        // Check if test content is present
-        assertTrue(blobStore.blobExists(container, folder + blobName));
 
     }
 
@@ -422,9 +380,9 @@ public class PCloudForJCloudTest {
          */
         {
             PageSet<? extends StorageMetadata> pageSet = blobStore.list(container, ListContainerOptions.NONE);
-            assertEquals(3, pageSet.size());
+            assertEquals(2, pageSet.size());
             List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-            assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2, folder)));
+            assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2)));
         }
 
         /*
@@ -444,9 +402,9 @@ public class PCloudForJCloudTest {
         {
             PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
                     ListContainerOptions.Builder.recursive());
-            assertEquals(5, pageSet.size());
+            assertEquals(4, pageSet.size());
             List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-            assertTrue(names.containsAll(Arrays.asList(folder, blobName1, blobName2, blobName3, blobName4)));
+            assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2, blobName3, blobName4)));
         }
 
         /*
@@ -455,9 +413,9 @@ public class PCloudForJCloudTest {
         {
             PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
                     ListContainerOptions.Builder.recursive().prefix(folder));
-            assertEquals(3, pageSet.size());
+            assertEquals(2, pageSet.size());
             List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
-            assertTrue(names.containsAll(Arrays.asList(folder, blobName3, blobName4)));
+            assertTrue(names.containsAll(Arrays.asList(blobName3, blobName4)));
         }
 
     }
@@ -504,6 +462,25 @@ public class PCloudForJCloudTest {
             List<String> preFixBlobNames = blobNames.stream().filter(f -> f.startsWith("pre-"))
                     .collect(Collectors.toList());
             assertTrue(names.containsAll(preFixBlobNames));
+        }
+
+        /*
+         * Should support pagination
+         */
+        {
+            PageSet<? extends StorageMetadata> firstPageSet = blobStore.list(container,
+                    ListContainerOptions.Builder.maxResults(TEST_FILES / 2));
+            assertNotNull(firstPageSet.getNextMarker());
+
+            PageSet<? extends StorageMetadata> secondPageSet = blobStore.list(container,
+                    ListContainerOptions.Builder.maxResults(TEST_FILES / 2).afterMarker(firstPageSet.getNextMarker()));
+            assertEquals(TEST_FILES / 2, secondPageSet.size());
+
+            Set<String> names = new HashSet<>();
+            names.addAll(firstPageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList()));
+            names.addAll(secondPageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList()));
+
+            assertTrue(names.containsAll(blobNames));
         }
 
     }

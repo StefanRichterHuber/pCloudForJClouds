@@ -3,11 +3,14 @@ package com.github.stefanrichterhuber.pCloudForjClouds.connection;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
 
 import javax.inject.Inject;
 import javax.inject.Named;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudUtils;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.inject.Provider;
 import com.pcloud.sdk.ApiClient;
@@ -33,10 +36,13 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
     @Inject
     protected PCloudApiClientProvider(
             @Named(PCloudConstants.PROPERTY_CLIENT_SECRET) String clientSecret, //
-            @Named(PCloudConstants.PROPERTY_PCLOUD_API) String pCloudHost //
-    ) {
+            // @Named(Constants.PROPERTY_ENDPOINT) String pCloudHost //
+            Properties props) {
         this.clientSecret = checkNotNull(clientSecret, "Property " + PCloudConstants.PROPERTY_CLIENT_SECRET);
-        this.pCloudHost = checkNotNull(pCloudHost, "Property " + PCloudConstants.PROPERTY_PCLOUD_API);
+        // pCloudHost = pCloudHost != null ? pCloudHost :
+        // PCloudUtils.testForAPIEndpoint(clientSecret).orNull();
+//        this.pCloudHost = checkNotNull(pCloudHost, "Property " + Constants.PROPERTY_ENDPOINT);
+        this.pCloudHost = PCloudUtils.testForAPIEndpoint(clientSecret).orNull();
     }
 
     /**
@@ -47,7 +53,7 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
      * @return {@link ApiClient}
      */
     private static final ApiClient create(String pCloudHost, String clientSecret) {
-        return PCloudSdk.newClientBuilder().apiHost(pCloudHost)
+        return PCloudSdk.newClientBuilder().apiHost(pCloudHost).callbackExecutor(ForkJoinPool.commonPool())
                 .authenticator(Authenticators.newOAuthAuthenticator(clientSecret)).create();
     }
 

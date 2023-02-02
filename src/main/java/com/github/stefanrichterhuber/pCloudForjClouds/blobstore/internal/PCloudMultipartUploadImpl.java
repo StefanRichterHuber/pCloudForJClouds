@@ -16,6 +16,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.io.IOUtils;
+import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.BlobMetadata;
 import org.jclouds.blobstore.domain.MultipartPart;
 import org.jclouds.blobstore.options.PutOptions;
@@ -39,8 +40,6 @@ import com.pcloud.sdk.DataSource;
 import com.pcloud.sdk.RemoteFile;
 
 public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
-    private static final int TIME_BETWEEN_RETRIES_FOR_FINAL_CHECKSUM = 250;
-    private static final int RETRIES_TO_WAIT_FOR_FINAL_CHECKSUM = 1 * 4;
     private static final int BUFFER_SIZE = 1 * 1024 * 1024; // 1MB
     private static final Logger LOGGER = LoggerFactory.getLogger(PCloudMultipartUploadImpl.class);
     private static final String MULTIPART_PREFIX = ".mpus-";
@@ -237,37 +236,6 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
 
     }
 
-    /**
-     * Unfortunately sometimes the checksum returned after renaming the file is not
-     * the final one. Therefore we have to check
-     * the file metadata again for some time if it changes.
-     * 
-     * @param rf      {@link RemoteFile}
-     * @param retries Number of retries
-     * @return
-     */
-    private CompletableFuture<String> waitForFinalChecksum(RemoteFile rf, final int retries) {
-        return PCloudUtils.execute(this.apiClient.loadFile(rf.fileId())) //
-                .thenComposeAsync(remoteFile -> {
-                    if (rf.hash().equals(remoteFile.hash()) && retries > 0) {
-                        // Still the same initial checksum -> try again after some time
-                        try {
-                            Thread.sleep(TIME_BETWEEN_RETRIES_FOR_FINAL_CHECKSUM);
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-                        return waitForFinalChecksum(rf, retries - 1);
-                    } else {
-
-                        LOGGER.debug("It took < {} ms for the backend to calculate the final checksum",
-                                (RETRIES_TO_WAIT_FOR_FINAL_CHECKSUM - retries)
-                                        * TIME_BETWEEN_RETRIES_FOR_FINAL_CHECKSUM);
-
-                        return CompletableFuture.completedFuture(remoteFile.hash());
-                    }
-                });
-    }
-
     @Override
     public CompletableFuture<String> complete() {
         // First ensure the queue is written
@@ -286,15 +254,17 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
         return PCloudUtils.execute(this.apiClient.renameFile(temporaryFileId, blobName)) //
                 .thenCompose(remoteFile -> {
                     LOGGER.debug("Renamed multipart temporary file {} to {}", temporaryFileName, blobName);
-                    LOGGER.debug("Waiting for the final checksum from the backend (current {}) ...", remoteFile.hash());
-                    return this.waitForFinalChecksum(remoteFile, RETRIES_TO_WAIT_FOR_FINAL_CHECKSUM);
-                }) //
-                .thenCompose(buildinHash -> {
-                    LOGGER.debug("Received the final checksum from the backend: {}", buildinHash);
+                    LOGGER.debug("Received the final checksum from the backend: {}", remoteFile.hash());
                     // Upload metadata
-                    BlobHashes hashes = this.hashBuilder.toBlobHashes(buildinHash);
-                    final ExternalBlobMetadata externalBlobMetadata = new ExternalBlobMetadata(this.containerName(),
-                            this.blobName(), hashes,
+                    // Warning: Sometimes the build-in hash of the remotefile changes after some
+                    // seconds!!
+                    final BlobHashes hashes = this.hashBuilder.toBlobHashes(remoteFile.hash());
+                    final ExternalBlobMetadata externalBlobMetadata = new ExternalBlobMetadata(
+                            this.containerName(),
+                            this.blobName(),
+                            remoteFile.fileId(),
+                            BlobAccess.PRIVATE,
+                            hashes,
                             this.blobMetadata.getUserMetadata());
                     return this.metadataStrategy.put(containerName, blobName, externalBlobMetadata)
                             .thenApply(v -> hashes.md5());

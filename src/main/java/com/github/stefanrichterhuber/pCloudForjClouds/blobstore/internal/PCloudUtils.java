@@ -3,21 +3,29 @@ package com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.BlobHashes;
+import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
+import com.google.common.base.Optional;
 import com.google.gson.GsonBuilder;
 import com.google.gson.stream.JsonReader;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
+import com.pcloud.sdk.Authenticators;
 import com.pcloud.sdk.Call;
 import com.pcloud.sdk.Callback;
+import com.pcloud.sdk.PCloudSdk;
 import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFolder;
 
@@ -61,6 +69,37 @@ public final class PCloudUtils {
             }
         });
         return result;
+    }
+
+    /**
+     * Converts a
+     * {@link Collection} of {@link CompletableFuture}s to a
+     * {@link CompletableFuture} of a {@link Collection} using
+     * {@link CompletableFuture#allOf(CompletableFuture...)}
+     * 
+     * @param <T>
+     * @param jobs {@link Collection} of {@link CompletableFuture}s to convert
+     * @return
+     */
+    public static <T, C extends Collection<T>> CompletableFuture<C> allOf(final Collection<CompletableFuture<T>> jobs,
+            final Supplier<C> collectionFactory) {
+        return CompletableFuture.allOf(jobs.toArray(new CompletableFuture[jobs.size()]))
+                .thenApply(v -> jobs.stream().map(CompletableFuture::join)
+                        .collect(Collectors.toCollection(collectionFactory)));
+    }
+
+    /**
+     * Converts a
+     * {@link Collection} of {@link CompletableFuture}s to a
+     * {@link CompletableFuture} of a {@link List} using
+     * {@link CompletableFuture#allOf(CompletableFuture...)}
+     * 
+     * @param <T>
+     * @param jobs {@link Collection} of {@link CompletableFuture}s to convert
+     * @return
+     */
+    public static <T> CompletableFuture<List<T>> allOf(final Collection<CompletableFuture<T>> jobs) {
+        return allOf(jobs, ArrayList::new);
     }
 
     /**
@@ -272,5 +311,29 @@ public final class PCloudUtils {
             throws RuntimeException {
         return notFileFoundDefault(e, defaultValue,
                 ex -> ex instanceof RuntimeException ? (RuntimeException) ex : new RuntimeException(ex));
+    }
+
+    /**
+     * There are different API endpoints for different accounts (see
+     * {@link PCloudConstants#PROPERTY_PCLOUD_API_VALUES}. Test all possible
+     * endpoints for the correct one.
+     * 
+     * @param id Oauth id of the user
+     * @return API Endpoint found.
+     */
+    public static Optional<String> testForAPIEndpoint(String id) {
+        for (String pCloudHost : PCloudConstants.PROPERTY_PCLOUD_API_VALUES) {
+            ApiClient apiClient = PCloudSdk.newClientBuilder().apiHost(pCloudHost)
+                    .authenticator(Authenticators.newOAuthAuthenticator(id)).create();
+            try {
+                RemoteFolder remoteFolder = apiClient.listFolder("/").execute();
+                if (remoteFolder != null) {
+                    return Optional.of(pCloudHost);
+                }
+            } catch (IOException | ApiError e) {
+                // Ignore this is is possible the wrong client
+            }
+        }
+        return Optional.absent();
     }
 }

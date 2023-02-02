@@ -3,7 +3,9 @@ package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
-import com.pcloud.sdk.RemoteEntry;
+import org.jclouds.blobstore.domain.BlobAccess;
+import org.jclouds.blobstore.domain.PageSet;
+import org.jclouds.blobstore.options.ListContainerOptions;
 
 /**
  * Strategy to handle user defined metadata
@@ -15,7 +17,9 @@ public interface MetadataStrategy {
     /**
      * Empty metadata
      */
-    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, BlobHashes.empty(),
+    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, 0,
+            BlobAccess.PRIVATE,
+            BlobHashes.empty(),
             Collections.emptyMap());
 
     /**
@@ -26,16 +30,6 @@ public interface MetadataStrategy {
      * @return {@link CompletableFuture} containing the result of the operation.
      */
     CompletableFuture<ExternalBlobMetadata> get(String container, String key);
-
-    /**
-     * Retrieves the metadata for the given remote entry.
-     * 
-     * @param container Container containing the blob
-     * @param key       Key of the blob
-     * @param rf        {@link RemoteEntry} of the blob to get the metadata for.
-     * @return {@link CompletableFuture} containing the result of the operation.
-     */
-    CompletableFuture<ExternalBlobMetadata> get(String container, String key, RemoteEntry rf);
 
     /**
      * Persist some metadata for the given blob
@@ -57,34 +51,13 @@ public interface MetadataStrategy {
     CompletableFuture<Void> delete(String container, String key);
 
     /**
-     * Copies the metadata for one blob to the metadata of another blob
+     * Lists all metadata keys for the given container mathing the given
+     * {@link ListContainerOptions}.
      * 
-     * @param fromContainer Source container
-     * @param fromKey       Source blob name
-     * @param toContainer   Target container
-     * @param toKey         Target container name
-     * @return {@link ExternalBlobMetadata} of the target file
+     * @param containerName Container to scan
+     * @param options       {@link ListContainerOptions} to apply
+     * @return
      */
-    default CompletableFuture<ExternalBlobMetadata> copy(String fromContainer, String fromKey, String toContainer,
-            String toKey) {
-        return this.get(fromContainer, fromKey)
-                .thenCompose(metadata -> this.put(toContainer, toKey, metadata).thenApply(v -> metadata));
-    }
-
-    /**
-     * Moves the metadata for one blob to the metadata of another blob
-     * 
-     * @param fromContainer Source container
-     * @param fromKey       Source blob name
-     * @param toContainer   Target container
-     * @param toKey         Target container name
-     * @return {@link ExternalBlobMetadata} of the target file
-     */
-    default CompletableFuture<ExternalBlobMetadata> move(String fromContainer, String fromKey, String toContainer,
-            String toKey) {
-        return this.get(fromContainer, fromKey)
-                .thenCompose(metadata -> put(toContainer, toKey, metadata)
-                        .thenCompose(v -> this.delete(fromContainer, fromKey))
-                        .thenApply(v -> metadata));
-    }
+    CompletableFuture<PageSet<ExternalBlobMetadata>> list(String containerName,
+            ListContainerOptions options);
 }

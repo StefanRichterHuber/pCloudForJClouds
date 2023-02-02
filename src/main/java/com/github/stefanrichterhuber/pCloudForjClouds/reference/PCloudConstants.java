@@ -3,6 +3,8 @@ package com.github.stefanrichterhuber.pCloudForjClouds.reference;
 import java.util.Arrays;
 import java.util.List;
 
+import org.jclouds.Constants;
+
 public class PCloudConstants {
     /**
      * Specify the base directory where provider starts its file operations - must
@@ -16,14 +18,14 @@ public class PCloudConstants {
     public static final String PROPERTY_CLIENT_SECRET = "jclouds.pcloud.clientsecret";
 
     /**
-     * Possible values for the property {@link #PROPERTY_PCLOUD_API}
+     * Possible values for the property {@link Constants#PROPERTY_ENDPOINT}
      */
     public static final List<String> PROPERTY_PCLOUD_API_VALUES = Arrays.asList("api.pcloud.com", "eapi.pcloud.com");
 
     /**
-     * API backend for pCloud. Either api.pcloud.com or eapi.pcloud.com
+     * Redis backend for metadata storage
      */
-    public static final String PROPERTY_PCLOUD_API = "jclouds.pcloud.api";
+    public static final String PROPERTY_REDIS_CONNECT_STRING = "jclouds.redis";
 
     /**
      * Is support for user-defined metadata active?

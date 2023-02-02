@@ -3,6 +3,8 @@ package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 import java.util.Map;
 import java.util.Objects;
 
+import org.jclouds.blobstore.domain.BlobAccess;
+
 import com.google.gson.annotations.Expose;
 
 /**
@@ -11,7 +13,7 @@ import com.google.gson.annotations.Expose;
  * @author stefan
  *
  */
-public class ExternalBlobMetadata {
+public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     /**
      * Different hashes of the target file
      */
@@ -36,12 +38,24 @@ public class ExternalBlobMetadata {
     @Expose
     private String key;
 
-    public ExternalBlobMetadata(String container, String key, BlobHashes hashes, Map<String, String> customMetadata) {
+    /**
+     * File id of the blob
+     */
+    @Expose
+    private long fileId;
+
+    @Expose
+    private BlobAccess access;
+
+    public ExternalBlobMetadata(String container, String key, long id, BlobAccess access, BlobHashes hashes,
+            Map<String, String> customMetadata) {
         super();
         this.hashes = hashes;
         this.customMetadata = customMetadata;
         this.container = container;
         this.key = key;
+        this.fileId = id;
+        this.access = access;
     }
 
     public BlobHashes hashes() {
@@ -58,6 +72,14 @@ public class ExternalBlobMetadata {
 
     public String key() {
         return this.key;
+    }
+
+    public long fileId() {
+        return this.fileId;
+    }
+
+    public BlobAccess access() {
+        return this.access;
     }
 
     @Override
@@ -82,6 +104,14 @@ public class ExternalBlobMetadata {
     public String toString() {
         return "ExternalBlobMetadata [hashes=" + hashes + ", customMetadata=" + customMetadata + ", container="
                 + container + ", key=" + key + "]";
+    }
+
+    @Override
+    public int compareTo(ExternalBlobMetadata o) {
+        if (this.container().equals(o.container())) {
+            return this.key().compareTo(o.key());
+        }
+        return this.container().compareTo(o.container());
     }
 
 }
