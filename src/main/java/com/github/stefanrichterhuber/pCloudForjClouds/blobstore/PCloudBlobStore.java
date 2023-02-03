@@ -598,10 +598,10 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
     @Override
     public boolean containerExists(String container) {
-        LOGGER.info("Does container {} exists", container);
 
         this.pCloudContainerNameValidator.validate(container);
         RemoteFolder remoteFolder = this.remoteFolderCache.compute(container, this::checkOrFetchFolder);
+        LOGGER.info("Does container {} exists -> {}", container, remoteFolder != null);
         return remoteFolder != null;
     }
 
@@ -1212,13 +1212,13 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
     @Override
     public long getMinimumMultipartPartSize() {
-        LOGGER.info("Get minium multipart size -> {}", MINIUM_MULTIPART_SIZE);
+        LOGGER.info("Get minium multipart size -> {} byte(s)", MINIUM_MULTIPART_SIZE);
         return MINIUM_MULTIPART_SIZE;
     }
 
     @Override
     public long getMaximumMultipartPartSize() {
-        LOGGER.info("Get minium multipart size -> {}", MAXIMUM_MULTIPART_SIZE);
+        LOGGER.info("Get minium multipart size -> {} bytes", MAXIMUM_MULTIPART_SIZE);
         return MAXIMUM_MULTIPART_SIZE;
     }
 

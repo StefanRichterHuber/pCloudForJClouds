@@ -14,6 +14,8 @@ import javax.inject.Named;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.internal.PageSetImpl;
 import org.jclouds.blobstore.options.ListContainerOptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.ExternalBlobMetadata;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy;
@@ -29,8 +31,7 @@ import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
 
 public class MetadataStrategyImpl implements MetadataStrategy {
-    // private static final Logger LOGGER =
-    // LoggerFactory.getLogger(MetadataStrategyImpl.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(MetadataStrategyImpl.class);
 
     private static final String SEPARATOR = "/";
 
@@ -80,10 +81,13 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                 String k = getRedisKey(container, key);
 
                 String v = this.redisConnection.get(k);
+
                 if (v != null) {
                     ExternalBlobMetadata md = this.gson.fromJson(v, ExternalBlobMetadata.class);
+                    LOGGER.debug("Found metadata for {}/{} -> {}", container, key, md);
                     return md;
                 } else {
+                    LOGGER.debug("No metadata found for {}/{}", container, key);
                     return null;
                 }
             });
@@ -100,6 +104,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
 
                 if (metadata != null) {
                     final String v = this.gson.toJson(metadata);
+                    LOGGER.debug("Set metadata {} for {}/{}", metadata, container, key);
                     this.redisConnection.set(k, v);
                 } else {
                     this.redisConnection.del(k);
@@ -116,6 +121,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
         if (active) {
             return CompletableFuture.supplyAsync(() -> {
                 final String k = getRedisKey(container, key);
+                LOGGER.debug("Delete metadata for {}/{}", container, key);
                 this.redisConnection.del(k);
                 return null;
             });
@@ -128,6 +134,8 @@ public class MetadataStrategyImpl implements MetadataStrategy {
     public CompletableFuture<PageSet<ExternalBlobMetadata>> list(String containerName,
             ListContainerOptions options) {
         if (active) {
+            LOGGER.debug("List metadata for container {} with options {}", containerName, options);
+
             if (options == null) {
                 return list(containerName, ListContainerOptions.NONE);
             }

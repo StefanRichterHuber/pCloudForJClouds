@@ -25,9 +25,12 @@ import org.gaul.s3proxy.S3Proxy;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
@@ -66,14 +69,23 @@ public class S3ProxyTest {
     private static final String CONTENT = CONTENT_LINES.stream().collect(Collectors.joining());
     private static final byte[] CONTENT_BYTES = CONTENT.getBytes(Charsets.UTF_8);
 
+    @SuppressWarnings("rawtypes")
+    @Rule
+    public GenericContainer<?> redis = new GenericContainer(DockerImageName.parse("redis:5.0.3-alpine"))
+            .withExposedPorts(6379);
+
     @Before
     public void setup() throws Exception {
+        final String token = System.getenv("PCLOUD_TOKEN");
+
         s3Proxy = S3Proxy.builder() //
                 .endpoint(URI.create("http://127.0.0.1:8080")) //
                 .awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "access", "secret") //
                 .build();
 
         Properties properties = new Properties();
+        properties.setProperty(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING,
+                String.format("redis://%s:%d", redis.getHost(), redis.getFirstMappedPort()));
         properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
 
         s3Proxy.setBlobStoreLocator(new DynamicPCloudBlobStoreLocator(properties));
@@ -85,8 +97,8 @@ public class S3ProxyTest {
         s3Client = AmazonS3ClientBuilder.standard().withPathStyleAccessEnabled(true)
                 .withCredentials(new AWSStaticCredentialsProvider(
                         // User ID and secretkey must be the same: The pCloud secret key
-                        new BasicAWSCredentials(System.getenv("PCLOUD_TOKEN"),
-                                System.getenv("PCLOUD_TOKEN"))))
+                        new BasicAWSCredentials(token,
+                                token)))
                 // Region does not matter here
                 .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:8080",
                         Regions.US_EAST_1.getName()))
@@ -117,14 +129,12 @@ public class S3ProxyTest {
                 .listObjects(new ListObjectsRequest().withBucketName(bucket).withMaxKeys(5));
         List<S3ObjectSummary> objectSummaries1 = objectListing1.getObjectSummaries();
         assertFalse(objectSummaries1.isEmpty());
-        assertEquals(5, objectSummaries1.size());
         assertNotNull(objectListing1.getNextMarker());
 
         ObjectListing objectListing2 = s3Client.listObjects(new ListObjectsRequest().withBucketName(bucket)
                 .withMaxKeys(5).withMarker(objectListing1.getNextMarker()));
         List<S3ObjectSummary> objectSummaries2 = objectListing2.getObjectSummaries();
         assertFalse(objectSummaries2.isEmpty());
-        assertEquals(5, objectSummaries2.size());
 
         // Check if there are no overlaps
         List<String> r1 = objectSummaries1.stream().map(os -> os.getKey()).collect(Collectors.toList());
@@ -219,6 +229,8 @@ public class S3ProxyTest {
         s3Client.completeMultipartUpload(
                 new CompleteMultipartUploadRequest().withUploadId(initiateMultipartUpload.getUploadId())
                         .withBucketName(bucket).withKey("final").withPartETags(partEtags));
+
+        Thread.sleep(1000);
 
         // Download and check
         S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));

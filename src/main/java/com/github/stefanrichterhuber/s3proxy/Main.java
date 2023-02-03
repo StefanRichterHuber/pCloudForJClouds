@@ -52,6 +52,7 @@ public class Main implements Callable<Integer> {
 
         final S3Proxy s3Proxy = S3Proxy.builder() //
                 .endpoint(URI.create("http://" + endpoint)) //
+                // identity and credentials here do not matter, cause we use a BlobStoreLocator
                 .awsAuthentication(AuthenticationType.AWS_V2_OR_V4, "access", "secret") //
                 .build();
         s3Proxy.setBlobStoreLocator(new DynamicPCloudBlobStoreLocator(blobStoreProperties));
@@ -63,7 +64,7 @@ public class Main implements Callable<Integer> {
             s3Proxy.start();
         } catch (Exception e) {
             System.err.println(e.getMessage());
-            System.exit(1);
+            return 1;
         }
 
         /*
