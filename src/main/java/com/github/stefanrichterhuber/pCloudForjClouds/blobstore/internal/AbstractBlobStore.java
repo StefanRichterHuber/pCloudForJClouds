@@ -134,4 +134,23 @@ public abstract class AbstractBlobStore implements BlobStore {
             this.removeBlob(container, name);
         }
     }
+
+    @Override
+    public void createDirectory(String container, String directory) {
+        LOGGER.info("Create directory {} in container {}", directory, container);
+        this.putBlob(container, this.blobBuilder(directory).type(StorageType.FOLDER).build());
+    }
+
+    @Override
+    public void deleteDirectory(String containerName, String directory) {
+        LOGGER.info("Delete directory {} in container {}", directory, containerName);
+        this.removeBlob(containerName, directory);
+    }
+
+    @Override
+    public boolean directoryExists(String container, String directory) {
+        LOGGER.info("Check if directory {} exists in container {}", directory, container);
+        return this.blobExists(container, directory);
+    }
+
 }

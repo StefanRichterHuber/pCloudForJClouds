@@ -19,6 +19,7 @@ import org.apache.commons.io.IOUtils;
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.BlobMetadata;
 import org.jclouds.blobstore.domain.MultipartPart;
+import org.jclouds.blobstore.domain.StorageType;
 import org.jclouds.blobstore.options.PutOptions;
 import org.jclouds.io.Payload;
 import org.jclouds.io.payloads.ByteArrayPayload;
@@ -263,6 +264,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                             this.containerName(),
                             this.blobName(),
                             remoteFile.fileId(),
+                            StorageType.BLOB,
                             BlobAccess.PRIVATE,
                             hashes,
                             this.blobMetadata.getUserMetadata());

@@ -13,6 +13,7 @@ import javax.inject.Named;
 
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.PageSet;
+import org.jclouds.blobstore.domain.StorageType;
 import org.jclouds.blobstore.domain.internal.PageSetImpl;
 import org.jclouds.blobstore.options.ListContainerOptions;
 import org.slf4j.Logger;
@@ -23,15 +24,15 @@ import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.ExternalBlobMeta
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy;
 import com.github.stefanrichterhuber.pCloudForjClouds.connection.RedisClientProvider;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.lambdaworks.redis.KeyScanCursor;
 import com.lambdaworks.redis.RedisConnection;
 import com.lambdaworks.redis.ScanArgs;
 import com.lambdaworks.redis.ScanCursor;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
+import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFile;
+import com.pcloud.sdk.RemoteFolder;
 
 public class MetadataStrategyImpl implements MetadataStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(MetadataStrategyImpl.class);
@@ -39,8 +40,6 @@ public class MetadataStrategyImpl implements MetadataStrategy {
     private static final String SEPARATOR = "/";
 
     private final boolean active;
-
-    private final Gson gson;
 
     private final RedisConnection<String, String> redisConnection;
     private static final String REDIS_PREFIX = "PCloudBlobStore:";
@@ -56,7 +55,6 @@ public class MetadataStrategyImpl implements MetadataStrategy {
             ApiClient apiClient //
     ) {
         this.active = active;
-        this.gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
         this.redisConnection = new RedisClientProvider(redis).get();
         this.apiClient = apiClient;
 
@@ -89,7 +87,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                 String v = this.redisConnection.get(k);
 
                 if (v != null) {
-                    ExternalBlobMetadata md = this.gson.fromJson(v, ExternalBlobMetadata.class);
+                    ExternalBlobMetadata md = ExternalBlobMetadata.fromJSON(v);
                     LOGGER.debug("Found metadata for {}/{} -> {}", container, key, md);
                     return md;
                 } else {
@@ -98,7 +96,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                 }
             });
         } else {
-            return CompletableFuture.completedFuture(MetadataStrategy.EMPTY_METADATA);
+            return CompletableFuture.completedFuture(ExternalBlobMetadata.EMPTY_METADATA);
         }
     }
 
@@ -109,7 +107,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
                 final String k = getRedisKey(container, key);
 
                 if (metadata != null) {
-                    final String v = this.gson.toJson(metadata);
+                    final String v = metadata.toJson();
                     LOGGER.debug("Set metadata {} for {}/{}", metadata, container, key);
                     this.redisConnection.set(k, v);
                 } else {
@@ -209,13 +207,9 @@ public class MetadataStrategyImpl implements MetadataStrategy {
         // process data and fetch the file metadata for each job sync
         for (String key : keys) {
             final CompletableFuture<ExternalBlobMetadata> storageMetadata = CompletableFuture.supplyAsync(() -> {
-                String v = this.redisConnection.get(key);
-                if (v != null) {
-                    ExternalBlobMetadata md = this.gson.fromJson(v, ExternalBlobMetadata.class);
-                    return md;
-                } else {
-                    return null;
-                }
+                final String v = this.redisConnection.get(key);
+                final ExternalBlobMetadata md = ExternalBlobMetadata.fromJSON(v);
+                return md;
             });
             jobs.add(storageMetadata);
         }
@@ -256,34 +250,43 @@ public class MetadataStrategyImpl implements MetadataStrategy {
      * @param container  COntainer of the blob
      * @param key        Key of the blob
      * @param blobAccess {@link BlobAccess} to set in metadata
-     * @param file       {@link RemoteFile} to generate the metadata for.
+     * @param entry      {@link RemoteEntry} to generate the metadata for.
      * @return {@link ExternalBlobMetadata} generated and stored in cache.
      */
     public CompletableFuture<ExternalBlobMetadata> restoreMetadata(String container, String key, BlobAccess blobAccess,
-            RemoteFile file) {
+            RemoteEntry entry) {
         if (active) {
-            return PCloudUtils.calculateChecksum(apiClient, file.fileId())
-                    .thenApplyAsync(blobHashes -> {
-                        // european pCloud locations do not deliver MD5 checksums -> so calculate
-                        // manually (although very expensive :/)
-                        if (blobHashes.md5() == null) {
-                            try {
-                                return BlobHashes.from(file);
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
+            if (entry.isFile()) {
+                final RemoteFile file = entry.asFile();
+                return PCloudUtils.calculateChecksum(apiClient, file.fileId())
+                        .thenApplyAsync(blobHashes -> {
+                            // european pCloud locations do not deliver MD5 checksums -> so calculate
+                            // manually (although very expensive :/)
+                            if (blobHashes.md5() == null) {
+                                try {
+                                    return BlobHashes.from(file);
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            } else {
+                                return blobHashes;
                             }
-                        } else {
-                            return blobHashes;
-                        }
-                    })
-                    .thenApply(blobHashes -> new ExternalBlobMetadata(container, key, file.fileId(),
-                            blobAccess, blobHashes.withBuildin(file.hash()), Collections.emptyMap())
+                        })
+                        .thenApply(
+                                blobHashes -> new ExternalBlobMetadata(container, key, file.fileId(), StorageType.BLOB,
+                                        blobAccess, blobHashes.withBuildin(file.hash()), Collections.emptyMap())
 
-                    )
-                    .thenCompose(metadata -> this.put(container, key, metadata).thenApply(v -> metadata));
+                        )
+                        .thenCompose(metadata -> this.put(container, key, metadata).thenApply(v -> metadata));
+            } else {
+                final RemoteFolder folder = entry.asFolder();
+                final ExternalBlobMetadata metadata = new ExternalBlobMetadata(container, key, folder.folderId(),
+                        StorageType.FOLDER, blobAccess, BlobHashes.empty(), Collections.emptyMap());
 
+                return this.put(container, key, metadata).thenApply(v -> metadata);
+            }
         } else {
-            return CompletableFuture.completedFuture(MetadataStrategy.EMPTY_METADATA);
+            return CompletableFuture.completedFuture(ExternalBlobMetadata.EMPTY_METADATA);
         }
     }
 

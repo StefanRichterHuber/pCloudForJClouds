@@ -1,10 +1,14 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 
 import org.jclouds.blobstore.domain.BlobAccess;
+import org.jclouds.blobstore.domain.StorageType;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.Expose;
 
 /**
@@ -14,6 +18,16 @@ import com.google.gson.annotations.Expose;
  *
  */
 public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
+    private static final Gson gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
+
+    /**
+     * Empty metadata
+     */
+    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, 0, null,
+            BlobAccess.PRIVATE,
+            BlobHashes.empty(),
+            Collections.emptyMap());
+
     /**
      * Different hashes of the target file
      */
@@ -44,10 +58,20 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     @Expose
     private long fileId;
 
+    /**
+     * Access type (public / private)
+     */
     @Expose
     private BlobAccess access;
 
-    public ExternalBlobMetadata(String container, String key, long id, BlobAccess access, BlobHashes hashes,
+    /**
+     * Type of blob
+     */
+    @Expose
+    private StorageType storageType;
+
+    public ExternalBlobMetadata(String container, String key, long id, StorageType storageType, BlobAccess access,
+            BlobHashes hashes,
             Map<String, String> customMetadata) {
         super();
         this.hashes = hashes;
@@ -56,6 +80,7 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
         this.key = key;
         this.fileId = id;
         this.access = access;
+        this.storageType = storageType;
     }
 
     public BlobHashes hashes() {
@@ -82,9 +107,52 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
         return this.access;
     }
 
+    public StorageType storageType() {
+        return this.storageType;
+    }
+
     @Override
     public int hashCode() {
         return Objects.hash(container, customMetadata, hashes, key);
+    }
+
+    /**
+     * Reads a JSON representation of a {@link ExternalBlobMetadata} object.
+     * 
+     * @param json
+     * @return
+     */
+    public static ExternalBlobMetadata fromJSON(String json) {
+        if (json != null) {
+            ExternalBlobMetadata md = setDefaults(gson.fromJson(json, ExternalBlobMetadata.class));
+            return md;
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Converts this {@link ExternalBlobMetadata} to its JSON representation
+     * 
+     * @return
+     */
+    public String toJson() {
+        final String v = gson.toJson(this);
+        return v;
+    }
+
+    /**
+     * Fix metadata written in previous versions and set reasonable defaults
+     */
+    private static ExternalBlobMetadata setDefaults(ExternalBlobMetadata md) {
+        if (md != null) {
+            // For older data, sometimes the storage type is missing, set to default
+            if (md.storageType() == null) {
+                md = new ExternalBlobMetadata(md.container(), md.key(), md.fileId(), StorageType.BLOB,
+                        md.access(), md.hashes(), md.customMetadata());
+            }
+        }
+        return md;
     }
 
     @Override
@@ -102,8 +170,7 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
 
     @Override
     public String toString() {
-        return "ExternalBlobMetadata [hashes=" + hashes + ", customMetadata=" + customMetadata + ", container="
-                + container + ", key=" + key + "]";
+        return this.toJson();
     }
 
     @Override

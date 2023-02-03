@@ -1,9 +1,7 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 
-import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
-import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.options.ListContainerOptions;
 
@@ -14,14 +12,6 @@ import org.jclouds.blobstore.options.ListContainerOptions;
  *
  */
 public interface MetadataStrategy {
-    /**
-     * Empty metadata
-     */
-    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, 0,
-            BlobAccess.PRIVATE,
-            BlobHashes.empty(),
-            Collections.emptyMap());
-
     /**
      * Retrieves the metadata for the given blob
      * 
