@@ -808,37 +808,45 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     @Override
     public String putBlob(String container, Blob blob, PutOptions options) {
         assertContainerExists(container);
-        this.pCloudBlobKeyValidator.validate(blob.getMetadata().getName());
+        final String key = blob.getMetadata().getName();
+        this.pCloudBlobKeyValidator.validate(key);
 
-        LOGGER.info("Put blob {}/{} with options {}", container, blob, options);
+        LOGGER.info("Put blob {}/{} with options {}", container, key, options);
         try {
-            if (getDirectoryBlobSuffix(blob.getMetadata().getName()) != null) {
+            if (getDirectoryBlobSuffix(key) != null) {
                 return putDirectoryBlob(container, blob);
             }
 
-            final String name = getFileOfKey(blob.getMetadata().getName());
+            final String name = getFileOfKey(key);
 
-            final String rootDir = getFolderOfKey(container, blob.getMetadata().getName());
+            final String rootDir = getFolderOfKey(container, key);
 
             // Check if parent folder exists
             final RemoteFolder targetFolder = assureParentFolder(rootDir);
 
-            final HashingBlobDataSource ds = dataSourceFromBlob(blob);
-            final CompletableFuture<RemoteFile> fileRequest = PCloudUtils.execute(this.getApiClient().createFile(
-                    targetFolder, name, ds, blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE));
-
             // First write file (and generate hash codes)
-            final RemoteFile uploadedFiled = fileRequest.join();
+            final HashingBlobDataSource ds = dataSourceFromBlob(blob);
+            final RemoteFile uploadedFile = PCloudUtils.execute(this.getApiClient().createFile(
+                    targetFolder, name, ds, blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE))
+                    .join();
 
-            // Then write metadata
-            final ExternalBlobMetadata md = new ExternalBlobMetadata(container, blob.getMetadata().getName(),
-                    uploadedFiled.fileId(),
-                    BlobAccess.PRIVATE,
-                    ds.getHashes().withBuildin(uploadedFiled.hash()),
-                    blob.getMetadata().getUserMetadata());
+            // Check if md5 hashes match
+            final Optional<String> sendMD5 = Optional.fromNullable(blob.getMetadata())
+                    .transform(v -> v.getContentMetadata())
+                    .transform(v -> v.getContentMD5AsHashCode()).transform(v -> v.toString());
+            if (sendMD5.isPresent() && !sendMD5.get().equals(ds.getHashes().md5())) {
+                LOGGER.warn("Blob {}/{}: Client delivered MD5 {} does not match calculated MD5 during transfer {}",
+                        container, key, sendMD5.get(), ds.getHashes().md5());
+            }
 
             // Write the file metadata
-            this.metadataStrategy.put(container, blob.getMetadata().getName(), md).join();
+            final ExternalBlobMetadata md = new ExternalBlobMetadata(container, key,
+                    uploadedFile.fileId(),
+                    options.getBlobAccess(),
+                    ds.getHashes().withBuildin(uploadedFile.hash()),
+                    blob.getMetadata().getUserMetadata());
+
+            this.metadataStrategy.put(container, key, md).join();
 
             return ds.getHashes().md5();
         } catch (IOException | ApiError e) {

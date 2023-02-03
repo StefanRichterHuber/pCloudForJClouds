@@ -23,8 +23,8 @@ public class Main implements Callable<Integer> {
     private String baseDir = "/S3";
 
     @Option(names = { "-r",
-            "--redis" }, description = "redis connect string e.g. redis://localhost:6379")
-    private String redis;
+            "--redis" }, description = "redis connect string e.g. redis://localhost:6379", defaultValue = "redis://redis:6379")
+    private String redis = "redis://redis:6379";
 
     @Option(names = "--verbose", negatable = true, description = "Verbose output")
     boolean verbose;

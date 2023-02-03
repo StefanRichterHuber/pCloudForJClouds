@@ -42,13 +42,73 @@ A pCloud oauth token can be generated using the [pCloud web api](https://docs.pc
  ```
 
 ## Deployment
+
+The application needs an redis instance to store custom metadata and to improve backend performance by storing pCloud file ids. 
+It is even possible to store the redis log in pCloud to keep all necessary data in the cloud using the following docker compose file.
+
+```yaml
+version: '3.3'
+
+volumes:
+  pcloud-cache:
+
+services:
+    # rclone instance 
+    rclone:
+      image: rclone/rclone:latest
+      volumes:
+          - ./rclone.conf:/config/rclone/rclone.conf # Mount a rclone config file (created by rclone config) into the container
+          - pcloud-cache:/rclone-cache # rclone cache persisted as volume
+          - ./data:/data:shared
+          - /etc/passwd:/etc/passwd:ro
+          - /etc/group:/etc/group:ro
+          #- /etc/fuse.conf:/etc/fuse.conf:ro
+      devices:
+        - /dev/fuse:/dev/fuse:rwm
+      cap_add:
+        - SYS_ADMIN
+      security_opt:
+        - apparmor:unconfined
+      container_name: rclone
+      command: 'mount [rclone-config-name]:[folder-within-pCloud-to-store-redis-dump] /data --allow-other --allow-non-empty  --vfs-cache-mode full --cache-dir=/rclone-cache'
+
+    # redis instance to store metadata
+    redis:
+      image: redis:latest
+      depends_on:
+        - rclone
+      container_name: redis
+      devices:
+        - /dev/fuse:/dev/fuse:rwm
+      cap_add:
+        - SYS_ADMIN
+      security_opt:
+        - apparmor:unconfined
+      volumes:
+        - ./data:/data:shared #Folder shared with rclone instance. The redis dumps are stored here
+        #- /etc/fuse.conf:/etc/fuse.conf:ro
+      command: '--save 60 1 --loglevel warning' # Create an redis dump every 60s if at least one changes happened
+
+    # Proxy build, configured to use local redis instance.
+    s3proxy:
+      depends_on:
+        - redis
+      image: s3proxy:latest
+      container_name: s3proxy
+      ports:
+        - 8080:8080
+      command: '--redis redis://redis:6379'
+      labels:
+
+```
+
+
+
 Upon building the project with maven, the `maven-jar-plugin` is used to generate an executable jar, which just needs the generated `libs` folder and the main `pcloud-s3proxy*.jar` to run.
 
 ```cmd
-java -jar pcloud-s3proxy.jar -e 0.0.0.0:8080
+java -jar pcloud-s3proxy.jar -e 0.0.0.0:8080 -r redis://redis:6379
 ```
-
-or use the attached dockerfile to build a docker image.
 
 ## Limitations
 **Use this program at your own risk! There is no guarantee it transfers your files reliably.**
