@@ -11,12 +11,14 @@ import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
 
+import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.internal.PageSetImpl;
 import org.jclouds.blobstore.options.ListContainerOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.BlobHashes;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.ExternalBlobMetadata;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy;
 import com.github.stefanrichterhuber.pCloudForjClouds.connection.RedisClientProvider;
@@ -29,6 +31,7 @@ import com.lambdaworks.redis.ScanArgs;
 import com.lambdaworks.redis.ScanCursor;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
+import com.pcloud.sdk.RemoteFile;
 
 public class MetadataStrategyImpl implements MetadataStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(MetadataStrategyImpl.class);
@@ -44,6 +47,8 @@ public class MetadataStrategyImpl implements MetadataStrategy {
 
     private final String redisKeyPrefix;
 
+    private final ApiClient apiClient;
+
     @Inject
     protected MetadataStrategyImpl( //
             @Named(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE) boolean active, //
@@ -53,6 +58,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
         this.active = active;
         this.gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
         this.redisConnection = new RedisClientProvider(redis).get();
+        this.apiClient = apiClient;
 
         // We need to distinguish between different users in the cache
         try {
@@ -241,6 +247,44 @@ public class MetadataStrategyImpl implements MetadataStrategy {
         }
 
         return keys;
+    }
+
+    /**
+     * Restores the metadata entries (without custom metadata!) for the given
+     * {@link RemoteFile}. Data is stored in cache.
+     * 
+     * @param container  COntainer of the blob
+     * @param key        Key of the blob
+     * @param blobAccess {@link BlobAccess} to set in metadata
+     * @param file       {@link RemoteFile} to generate the metadata for.
+     * @return {@link ExternalBlobMetadata} generated and stored in cache.
+     */
+    public CompletableFuture<ExternalBlobMetadata> restoreMetadata(String container, String key, BlobAccess blobAccess,
+            RemoteFile file) {
+        if (active) {
+            return PCloudUtils.calculateChecksum(apiClient, file.fileId())
+                    .thenApplyAsync(blobHashes -> {
+                        // european pCloud locations do not deliver MD5 checksums -> so calculate
+                        // manually (although very expensive :/)
+                        if (blobHashes.md5() == null) {
+                            try {
+                                return BlobHashes.from(file);
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        } else {
+                            return blobHashes;
+                        }
+                    })
+                    .thenApply(blobHashes -> new ExternalBlobMetadata(container, key, file.fileId(),
+                            blobAccess, blobHashes.withBuildin(file.hash()), Collections.emptyMap())
+
+                    )
+                    .thenCompose(metadata -> this.put(container, key, metadata).thenApply(v -> metadata));
+
+        } else {
+            return CompletableFuture.completedFuture(MetadataStrategy.EMPTY_METADATA);
+        }
     }
 
 }

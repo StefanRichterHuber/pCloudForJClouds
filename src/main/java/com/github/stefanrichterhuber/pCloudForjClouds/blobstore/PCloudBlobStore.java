@@ -904,9 +904,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
                     // Copy metadata
                     if (result.isFile()) {
-                        @Nullable
-                        final ExternalBlobMetadata srcMetadata = Optional
-                                .fromNullable(this.metadataStrategy.get(fromContainer, fromName).join()).orNull();
+                        final ExternalBlobMetadata srcMetadata = this.metadataStrategy.get(fromContainer, fromName).join();
                         if (srcMetadata != null) {
                             ExternalBlobMetadata trgtMetadata = new ExternalBlobMetadata(toContainer, toName,
                                     result.asFile().fileId(), srcMetadata.access(),
@@ -945,15 +943,13 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             // Remove final directory separator when fetching a directory
             name = stripDirectorySuffix(name);
 
-            @Nullable
-            ExternalBlobMetadata metadata = Optional.fromNullable(this.metadataStrategy.get(container, name).join())
-                    .orNull();
+            final ExternalBlobMetadata metadata = this.metadataStrategy.get(container, name).join();
             if (metadata == null) {
                 // No metadata - no file
                 return null;
             }
             final RemoteFile remoteFile = PCloudUtils
-                    .execute(this.getApiClient().loadFile(metadata.fileId())).get();
+                    .execute(this.getApiClient().loadFile(metadata.fileId())).join();
             final Blob blob = createBlobFromRemoteEntry(container, name, remoteFile, metadata);
 
             if (options != null && options != GetOptions.NONE) {
@@ -1050,17 +1046,14 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @return Success of the operation
      */
     private CompletableFuture<Boolean> removeBlobWithMetadata(String container, String name) {
-        final CompletableFuture<Boolean> deleteJob = CompletableFuture.supplyAsync(() -> {
-            @Nullable
-            ExternalBlobMetadata metadata = Optional.fromNullable(this.metadataStrategy.get(container, name).join())
-                    .orNull();
-            return metadata;
-        }).thenCompose(md -> {
-            return md == null ? CompletableFuture.completedFuture(false)
-                    : PCloudUtils.execute(this.getApiClient().deleteFile(md.fileId()))
-                            .thenCompose(r -> r ? this.metadataStrategy.delete(container, name).thenApply(v -> r)
-                                    : CompletableFuture.completedFuture(r));
-        });
+        final CompletableFuture<Boolean> deleteJob = this.metadataStrategy.get(container, name)
+                .thenCompose(md -> {
+                    return md == null ? CompletableFuture.completedFuture(false)
+                            : PCloudUtils.execute(this.getApiClient().deleteFile(md.fileId()))
+                                    .thenCompose(
+                                            r -> r ? this.metadataStrategy.delete(container, name).thenApply(v -> r)
+                                                    : CompletableFuture.completedFuture(r));
+                });
         return deleteJob;
     }
 
