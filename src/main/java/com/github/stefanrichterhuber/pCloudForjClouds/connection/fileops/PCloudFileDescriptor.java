@@ -32,6 +32,16 @@ public interface PCloudFileDescriptor extends AutoCloseable {
     long fileid();
 
     /**
+     * Reads bytes from the
+     * 
+     * @param target Byte array for the bytes to write
+     * @param offset Offset from the beginning of the file
+     * @param len    Number of bytes to read (at most length of the file)
+     * @return Actual number of bytes read
+     */
+    long read(byte[] target, long offset, int len) throws IOException;
+
+    /**
      * Writes the given content to the opened file
      * 
      * @param content Content to write
@@ -39,6 +49,29 @@ public interface PCloudFileDescriptor extends AutoCloseable {
      * @throws IOException
      */
     long write(byte[] content) throws IOException;
+
+    /**
+     * Writes the given content to the opened file
+     * 
+     * @param fileOffset Offset relative to start of the file
+     * @param content    Content to write
+     * @return Number of bytes actually written
+     * @throws IOException
+     */
+    long write(long fileOffset, byte[] content) throws IOException;
+
+    /**
+     * Writes the given content to the opened file
+     * 
+     *
+     * @param fileOffset Offset relative to start of the file
+     * @param content    Content to write
+     * @param offset     the start offset in the data.
+     * @param len        the number of bytes to write.
+     * @return Number of bytes actually written
+     * @throws IOException
+     */
+    long write(long fileOffset, byte[] content, int offset, int len) throws IOException;
 
     /**
      * Writes the given content to the opened file
@@ -90,4 +123,12 @@ public interface PCloudFileDescriptor extends AutoCloseable {
      * @return
      */
     OutputStream openStream();
+
+    /**
+     * If length is less than the file size, then the extra data is cut from the
+     * file, else the the file contents are extended with zeroes as needed.
+     * 
+     * @param size
+     */
+    void truncate(long size) throws IOException;
 }

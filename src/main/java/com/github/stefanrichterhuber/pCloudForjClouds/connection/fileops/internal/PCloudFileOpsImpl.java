@@ -2,6 +2,7 @@ package com.github.stefanrichterhuber.pCloudForjClouds.connection.fileops.intern
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.Arrays;
 
@@ -219,4 +220,78 @@ public class PCloudFileOpsImpl implements PCloudFileOps {
         }
     }
 
+    /**
+     * Writes content to the open file
+     * 
+     * @param fd      File descriptor
+     * @param offset  Offset within the file
+     * @param content Content to write
+     * @return
+     * @throws IOException
+     */
+    public long write(int fd, long offset, byte[] content) throws IOException {
+        final HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
+                .addPathSegment("file_pwrite") //
+                .addQueryParameter("offset", String.valueOf(offset))
+                .addQueryParameter("fd", String.valueOf(fd));
+
+        final RequestBody requestBody = RequestBody.create(MediaType.parse("application/octet-stream"), content);
+
+        final Request request = new Request.Builder().url(apiHost).url(urlBuilder.build()).put(requestBody).build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            JsonReader reader = new JsonReader(new BufferedReader(new InputStreamReader(response.body().byteStream())));
+            FileWriteResultImpl result = gson.fromJson(reader, FileWriteResultImpl.class);
+            if (result.result() == 0) {
+                return result.bytes();
+            } else {
+                throw new IOException("Writing content leads to result: " + result.result());
+            }
+        }
+    }
+
+    /**
+     * Reads content from the tile
+     * 
+     * @param fd     File descriptor
+     * @param target byte array for the data read
+     * @param offset Offset from the beginning of the file
+     * @param length Number of bytes to read
+     * @return Number of bytes actually read
+     * @throws IOException
+     */
+    public int read(int fd, byte[] target, long offset, int length) throws IOException {
+        final HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
+                .addPathSegment("file_pread") //
+                .addQueryParameter("count", String.valueOf(length)) //
+                .addQueryParameter("offset", String.valueOf(offset)) //
+                .addQueryParameter("fd", String.valueOf(fd));
+
+        final Request request = new Request.Builder().url(apiHost).url(urlBuilder.build()).get().build();
+
+        try (Response response = httpClient.newCall(request).execute(); InputStream is = response.body().byteStream()) {
+            if (response.header("X-Error") != null) {
+                throw new IOException(String.format("Unable to  read file %d: %s", fd, response.header("X-Error")));
+            }
+            final int result = is.readNBytes(target, 0, length);
+            return result;
+        }
+
+    }
+
+    public void truncate(int fd, long size) throws IOException {
+        final HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
+                .addPathSegment("file_truncate") //
+                .addQueryParameter("length", String.valueOf(size))
+                .addQueryParameter("fd", String.valueOf(fd));
+
+        final Request request = new Request.Builder().url(apiHost).url(urlBuilder.build()).get().build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            JsonReader reader = new JsonReader(new BufferedReader(new InputStreamReader(response.body().byteStream())));
+            FileOpsResultImpl result = gson.fromJson(reader, FileOpsResultImpl.class);
+            if (result.result() != 0) {
+                throw new IOException(String.format("Failed to truncate file to size %d: %d", size, result.result()));
+            }
+        }
+
+    }
 }
