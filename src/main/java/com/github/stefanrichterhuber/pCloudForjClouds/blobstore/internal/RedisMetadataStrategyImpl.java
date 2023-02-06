@@ -34,8 +34,8 @@ import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
 
-public class MetadataStrategyImpl implements MetadataStrategy {
-    private static final Logger LOGGER = LoggerFactory.getLogger(MetadataStrategyImpl.class);
+public class RedisMetadataStrategyImpl implements MetadataStrategy {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RedisMetadataStrategyImpl.class);
 
     private static final String SEPARATOR = "/";
 
@@ -49,7 +49,7 @@ public class MetadataStrategyImpl implements MetadataStrategy {
     private final ApiClient apiClient;
 
     @Inject
-    protected MetadataStrategyImpl( //
+    protected RedisMetadataStrategyImpl( //
             @Named(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE) boolean active, //
             @Named(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING) String redis, //
             ApiClient apiClient //

@@ -9,7 +9,7 @@ import org.jclouds.blobstore.config.BlobStoreObjectModule;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MultipartUploadFactory;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.PCloudBlobStore;
-import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.MetadataStrategyImpl;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.RedisMetadataStrategyImpl;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.MultipartUploadFactoryImpl;
 import com.github.stefanrichterhuber.pCloudForjClouds.connection.PCloudApiClientProvider;
 import com.github.stefanrichterhuber.pCloudForjClouds.connection.RedisClientProvider;
@@ -36,6 +36,6 @@ public class PCloudCustomBlobStoreContextModule extends AbstractModule {
         bind(PCloudFileOps.class).to(PCloudFileOpsImpl.class);
         bind(BlobRequestSigner.class).to(LocalBlobRequestSigner.class);
         bind(MultipartUploadFactory.class).to(MultipartUploadFactoryImpl.class);
-        bind(MetadataStrategy.class).to(MetadataStrategyImpl.class);
+        bind(MetadataStrategy.class).to(RedisMetadataStrategyImpl.class);
     }
 }
