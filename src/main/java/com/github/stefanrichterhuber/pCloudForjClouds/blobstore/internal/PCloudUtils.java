@@ -199,13 +199,45 @@ public final class PCloudUtils {
                 .addQueryParameter("fileid", Long.toString(fileId)) //
         ;
 
-        Request request = new Request.Builder().url(apiHost).url(urlBuilder.build()).get().build();
+        Request request = new Request.Builder().url(urlBuilder.build()).get().build();
 
         return execute(httpClient.newCall(request)).thenApply(resp -> {
             try (Response response = resp) {
                 JsonReader reader = new JsonReader(
                         new BufferedReader(new InputStreamReader(response.body().byteStream())));
                 BlobHashes result = gson.fromJson(reader, BlobHashes.class);
+                return result;
+            }
+        });
+    }
+
+    /**
+     * This method returns closest API server to the requesting client. The biggest
+     * speed gain will be with upload methods. Clients should have fallback logic.
+     * If request to API server different from api.pcloud.com fails (network error)
+     * the client should fallback to using api.pcloud.com.
+     * 
+     * @param apiEndpoint either eapi.pcloud.com or api.pcloud.com
+     * 
+     * @return
+     */
+    public static CompletableFuture<GetApiResponse> getApiServer(String apiEndpoint) {
+        final OkHttpClient httpClient = new OkHttpClient.Builder()
+                .protocols(Collections.singletonList(Protocol.HTTP_1_1)).build();
+
+        var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
+
+        final HttpUrl.Builder urlBuilder = HttpUrl.parse("https://" + apiEndpoint).newBuilder() //
+                .addPathSegment("getapiserver") //
+        ;
+
+        Request request = new Request.Builder().url(urlBuilder.build()).get().build();
+
+        return execute(httpClient.newCall(request)).thenApply(resp -> {
+            try (Response response = resp) {
+                JsonReader reader = new JsonReader(
+                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
+                GetApiResponse result = gson.fromJson(reader, GetApiResponse.class);
                 return result;
             }
         });
@@ -333,6 +365,8 @@ public final class PCloudUtils {
             } catch (IOException | ApiError e) {
                 // Ignore this is is possible the wrong client
             }
+
+            // Also check for the closest API endpoint
         }
         return Optional.absent();
     }
