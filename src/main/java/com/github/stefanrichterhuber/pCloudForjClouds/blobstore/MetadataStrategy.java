@@ -1,9 +1,14 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.options.ListContainerOptions;
+
+import com.pcloud.sdk.RemoteEntry;
+import com.pcloud.sdk.RemoteFile;
 
 /**
  * Strategy to handle user defined metadata
@@ -50,4 +55,18 @@ public interface MetadataStrategy {
      */
     CompletableFuture<PageSet<ExternalBlobMetadata>> list(String containerName,
             ListContainerOptions options);
+
+    /**
+     * Restores the metadata entries (without custom metadata!) for the given
+     * {@link RemoteFile}. Data is stored in cache.
+     * 
+     * @param container    Container of the blob
+     * @param key          Key of the blob
+     * @param blobAccess   {@link BlobAccess} to set in metadata
+     * @param usermetadata Additional user metadata
+     * @param entry        {@link RemoteEntry} to generate the metadata for.
+     * @return {@link ExternalBlobMetadata} generated and stored in cache.
+     */
+    CompletableFuture<ExternalBlobMetadata> restoreMetadata(String container, String key, BlobAccess blobAccess,
+            Map<String, String> usermetadata, RemoteEntry entry);
 }

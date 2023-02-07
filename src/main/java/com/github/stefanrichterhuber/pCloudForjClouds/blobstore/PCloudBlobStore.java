@@ -19,6 +19,8 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import javax.inject.Inject;
@@ -138,6 +140,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     protected PCloudBlobStore( //
             BlobStoreContext context, Provider<BlobBuilder> blobBuilders, //
             @Named(PCloudConstants.PROPERTY_BASEDIR) String baseDir, //
+            @Named(PCloudConstants.PROPERTY_AUTOMATIC_RESTORE_OF_METADATA_CACHE) boolean autorestore, //
             ApiClient apiClient, //
             PCloudContainerNameValidator pCloudContainerNameValidator, //
             PCloudBlobKeyValidator pCloudBlobKeyValidator, //
@@ -160,6 +163,12 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         // Directly add the folder to the cache
         this.remoteFolderCache.put(baseDirectory, baseFolder);
         this.metadataStrategy = checkNotNull(metadataStrategy, "PCloud metadatastrategy");
+
+        if (autorestore) {
+            Executor delayedExecutor = CompletableFuture.delayedExecutor(30, TimeUnit.SECONDS);
+            CompletableFuture.runAsync(() -> {
+            }, delayedExecutor).thenCompose(v -> this.restoreMetadata());
+        }
 
     }
 
@@ -582,6 +591,62 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         return blob;
     }
 
+    /**
+     * Checks if the metadata for all containers is still present and restores basic
+     * metadata if, not
+     */
+    public CompletableFuture<Void> restoreMetadata() {
+        return PCloudUtils
+                .execute(this.getApiClient().listFolder(this.remoteFolderCache.get(baseDirectory).folderId(), true))
+                .thenCompose(rf -> {
+                    final List<CompletableFuture<Void>> jobs = rf.children() //
+                            .stream() //
+                            .filter(e -> e.isFolder()) // Every folder here is a container
+                            .map(e -> restoreMetadata(e.name(), e.asFolder(), "")) //
+                            .collect(Collectors.toList());
+
+                    return PCloudUtils.allOf(jobs).thenApply(v -> null);
+                });
+    }
+
+    /**
+     * Checks if the metadata the given container is still present and restores
+     * basic metadata if, not
+     * 
+     * @param container  Container to scan
+     * @param folder     {@link RemoteFolder} to scan
+     * @param blobPrefix Key prefix for each blob
+     * @return {@link CompletableFuture}
+     * 
+     */
+    private CompletableFuture<Void> restoreMetadata(String container, RemoteFolder folder, String blobPrefix) {
+        // Everything within a container is a blob (either file or directory blob)
+        final List<CompletableFuture<Void>> jobs = new ArrayList<>();
+        for (RemoteEntry e : folder.children()) {
+            final String key = blobPrefix + e.name() + (e.isFolder() ? SEPARATOR : "");
+            // First check if metadata present
+            final CompletableFuture<ExternalBlobMetadata> job = this.metadataStrategy.get(container, key)
+                    .thenCompose(ebm -> {
+                        if (ebm != null) {
+                            return CompletableFuture.completedFuture(ebm);
+                        } else {
+                            LOGGER.info("Necessary to restore metadata of blob {}/{} (type {})", container, key, e.isFile() ? "blob" : "folder");
+                            return this.metadataStrategy.restoreMetadata(container, key, BlobAccess.PRIVATE,
+                                    Collections.emptyMap(), e);
+                        }
+                    });
+            jobs.add(job.thenApply(v -> null));
+
+            // If this is a folder check for further blobs within
+            if (e.isFolder()) {
+                final RemoteFolder f = e.asFolder();
+                final String prefix = blobPrefix + e.name() + SEPARATOR;
+                jobs.add(this.restoreMetadata(container, f, prefix));
+            }
+        }
+        return PCloudUtils.allOf(jobs).thenApply(v -> null);
+    }
+
     @Override
     public BlobStoreContext getContext() {
         return context;
@@ -680,6 +745,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 }).join();
 
         return result;
+
     }
 
     @Override

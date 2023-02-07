@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -247,13 +248,15 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * Restores the metadata entries (without custom metadata!) for the given
      * {@link RemoteFile}. Data is stored in cache.
      * 
-     * @param container  COntainer of the blob
-     * @param key        Key of the blob
-     * @param blobAccess {@link BlobAccess} to set in metadata
-     * @param entry      {@link RemoteEntry} to generate the metadata for.
+     * @param container    COntainer of the blob
+     * @param key          Key of the blob
+     * @param blobAccess   {@link BlobAccess} to set in metadata
+     * @param usermetadata Additional user metadata
+     * @param entry        {@link RemoteEntry} to generate the metadata for.
      * @return {@link ExternalBlobMetadata} generated and stored in cache.
      */
     public CompletableFuture<ExternalBlobMetadata> restoreMetadata(String container, String key, BlobAccess blobAccess,
+            Map<String, String> usermetadata,
             RemoteEntry entry) {
         if (active) {
             if (entry.isFile()) {
@@ -274,14 +277,14 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                         })
                         .thenApply(
                                 blobHashes -> new ExternalBlobMetadata(container, key, file.fileId(), StorageType.BLOB,
-                                        blobAccess, blobHashes.withBuildin(file.hash()), Collections.emptyMap())
+                                        blobAccess, blobHashes.withBuildin(file.hash()), usermetadata)
 
                         )
                         .thenCompose(metadata -> this.put(container, key, metadata).thenApply(v -> metadata));
             } else {
                 final RemoteFolder folder = entry.asFolder();
                 final ExternalBlobMetadata metadata = new ExternalBlobMetadata(container, key, folder.folderId(),
-                        StorageType.FOLDER, blobAccess, BlobHashes.empty(), Collections.emptyMap());
+                        StorageType.FOLDER, blobAccess, BlobHashes.empty(), usermetadata);
 
                 return this.put(container, key, metadata).thenApply(v -> metadata);
             }
