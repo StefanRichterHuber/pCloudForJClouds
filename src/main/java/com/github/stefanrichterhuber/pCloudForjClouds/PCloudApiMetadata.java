@@ -29,7 +29,7 @@ public class PCloudApiMetadata extends BaseApiMetadata {
     public Properties getDefaultProperties() {
         Properties properties = BaseHttpApiMetadata.defaultProperties();
         properties.put(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE, true);
-        properties.put(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/blobstore-metadata");
+        properties.put(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/S3-metadata");
         return properties;
     }
 

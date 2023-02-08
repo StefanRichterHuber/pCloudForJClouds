@@ -90,6 +90,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * files in the metadata folder
      */
     private void populateCache() {
+        LOGGER.info("Started populating cache ...");
         PCloudUtils.execute(this.apiClient.loadFolder(metadataFolderId)).thenApplyAsync(rf -> {
             for (RemoteEntry re : rf.children()) {
                 if (re.isFile()) {
@@ -106,6 +107,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                     }
                 }
             }
+            LOGGER.info("Finished populating cache. Loaded {} files.", rf.children().size());
             return null;
         });
     }
