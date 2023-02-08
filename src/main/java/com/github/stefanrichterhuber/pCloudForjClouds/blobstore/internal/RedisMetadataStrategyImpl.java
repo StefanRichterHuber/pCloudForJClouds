@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 
 import javax.inject.Inject;
@@ -91,20 +92,31 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      */
     private void populateCache() {
         LOGGER.info("Started populating cache ...");
-        PCloudUtils.execute(this.apiClient.loadFolder(metadataFolderId)).thenApplyAsync(rf -> {
+        PCloudUtils.execute(this.apiClient.listFolder(metadataFolderId)).thenApplyAsync(rf -> {
             for (RemoteEntry re : rf.children()) {
                 if (re.isFile()) {
-                    // There should be only files in the folder, but just to be sure
-                    try {
-                        final ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(re.asFile());
-                        final String k = getRedisKey(blobMetadata.container(), blobMetadata.key());
-                        final String v = blobMetadata.toJson();
-                        this.redisConnection.set(k, v);
-                        LOGGER.debug("Added metadata for blob {}/{} from remote to cache", blobMetadata.container(),
-                                blobMetadata.key());
-                    } catch (Exception e) {
-                        LOGGER.warn("Malformed metadata file {}: {}", re.name(), e);
-                    }
+                    ForkJoinPool.commonPool().execute(() -> {
+                        // There should be only files in the folder, but just to be sure
+                        try {
+                            final ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(re.asFile());
+                            final String k = getRedisKey(blobMetadata.container(), blobMetadata.key());
+                            final String v = blobMetadata.toJson();
+                            this.redisConnection.set(k, v);
+                            LOGGER.debug("Added metadata for blob {}/{} from remote to cache", blobMetadata.container(),
+                                    blobMetadata.key());
+
+                            final String canonicalFilename = this.getMetadataFileName(blobMetadata.container(),
+                                    blobMetadata.key());
+                            if (!re.name().equals(canonicalFilename)) {
+                                // Support for future changes of nameing schema
+                                LOGGER.info("Renamed metadata file {} -> {}", re.name(), canonicalFilename);
+                                re.rename(canonicalFilename);
+                            }
+
+                        } catch (Exception e) {
+                            LOGGER.warn("Malformed metadata file {}: {}", re.name(), e);
+                        }
+                    });
                 }
             }
             LOGGER.info("Finished populating cache. Loaded {} files.", rf.children().size());
@@ -183,6 +195,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      */
     @SuppressWarnings("deprecation")
     private String getMetadataFileName(String container, String key) {
+        // TODO change to base64 of filename or something alike with clear text
+        // container name
         return "BLOB" + Hashing.md5().hashString(container + SEPARATOR + key, StandardCharsets.UTF_8).toString()
                 + ".json";
     }

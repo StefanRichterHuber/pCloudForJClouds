@@ -78,9 +78,10 @@ public enum PCloudError {
      * @return
      */
     public static boolean isEntryNotFound(PCloudError pCloudError) {
-        if (pCloudError == PCloudError.DIRECTORY_DOES_NOT_EXIST
-                || pCloudError == PCloudError.FILE_NOT_FOUND
-                || pCloudError == PCloudError.FILE_OR_FOLDER_NOT_FOUND) {
+        if (pCloudError == DIRECTORY_DOES_NOT_EXIST
+                || pCloudError == FILE_NOT_FOUND
+                || pCloudError == FILE_OR_FOLDER_NOT_FOUND
+                || pCloudError == PARENT_DIR_DOES_NOT_EXISTS) {
             return true;
         }
         return false;
