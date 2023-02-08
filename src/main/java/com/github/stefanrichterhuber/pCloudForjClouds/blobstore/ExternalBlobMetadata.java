@@ -1,5 +1,10 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
@@ -10,6 +15,8 @@ import org.jclouds.blobstore.domain.StorageType;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.Expose;
+import com.google.gson.stream.JsonReader;
+import com.pcloud.sdk.RemoteFile;
 
 /**
  * Externalized metadata of a blob
@@ -128,6 +135,23 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
             return md;
         } else {
             return null;
+        }
+    }
+
+    /**
+     * Reads the {@link ExternalBlobMetadata} from a {@link RemoteFile} containing a
+     * JSON representation
+     * 
+     * @param rf {@link RemoteFile} to read
+     * @return {@link ExternalBlobMetadata} found
+     * @throws IOException
+     */
+    public static ExternalBlobMetadata readJSON(RemoteFile rf) throws IOException {
+        try (final InputStream is = rf.byteStream();
+                final JsonReader reader = new JsonReader(
+                        new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8)))) {
+            final ExternalBlobMetadata result = setDefaults(gson.fromJson(reader, ExternalBlobMetadata.class));
+            return result;
         }
     }
 

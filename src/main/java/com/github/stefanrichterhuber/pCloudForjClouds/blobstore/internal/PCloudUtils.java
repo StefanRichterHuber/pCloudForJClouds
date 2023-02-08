@@ -244,6 +244,52 @@ public final class PCloudUtils {
     }
 
     /**
+     * List updates of the user's folders/files.
+     * 
+     * Optionally, takes the parameter diffid, which if provided returns only
+     * changes since that diffid.
+     * 
+     * @param apiClient {@link ApiClient} to connect to backend
+     * @param diffId    Optional, receive only changes since that diffId
+     * @param limit     Optional, receive only that many events
+     * @param block     Block until an event arrives
+     * @return
+     */
+    public static CompletableFuture<DiffResponse> getDiff(ApiClient apiClient, Integer diffId, Integer limit,
+            boolean block) {
+        var apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
+        var httpClient = PCloudUtils.getHTTPClient(apiClient);
+
+        var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation()
+                .setDateFormat("EEE, dd MMM yyyy HH:mm:ss zzzz").create();
+
+        HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
+                .addPathSegment("diff") //
+        ;
+        if (diffId != null) {
+            urlBuilder = urlBuilder.addQueryParameter("diffid", Integer.toString(diffId));
+        }
+        if (limit != null) {
+            urlBuilder = urlBuilder.addQueryParameter("limit", Integer.toString(limit));
+        }
+        if (block) {
+            urlBuilder = urlBuilder.addQueryParameter("block", "1");
+        }
+
+        Request request = new Request.Builder().url(urlBuilder.build()).get().build();
+
+        return execute(httpClient.newCall(request)).thenApply(resp -> {
+            try (Response response = resp) {
+                JsonReader reader = new JsonReader(
+                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
+                DiffResponse result = gson.fromJson(reader, DiffResponse.class);
+                return result;
+            }
+        });
+
+    }
+
+    /**
      * Creates a folder and all necessary root folders
      */
     public static RemoteFolder createBaseDirectory(ApiClient apiClient, String folder) {

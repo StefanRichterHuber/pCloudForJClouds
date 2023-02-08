@@ -59,11 +59,11 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
      * @param clientSecret client secret
      * @return {@link ApiClient}
      */
-    private static final ApiClient create(String pCloudHost, String clientSecret) {
+    public static final ApiClient create(String pCloudHost, String clientSecret) {
         GetApiResponse apiResponse = PCloudUtils.getApiServer(pCloudHost).join();
         if (apiResponse.getResult() == 0 && apiResponse.getApi().size() > 0
                 && !apiResponse.getApi().get(0).equals(pCloudHost)) {
-            LOGGER.info("Determine nearest API endpoint '{}' for general API endpoint '{}'",
+            LOGGER.info("Determined nearest API endpoint '{}' for general API endpoint '{}'",
                     apiResponse.getApi().get(0),
                     pCloudHost);
             pCloudHost = apiResponse.getApi().get(0);

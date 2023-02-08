@@ -1,7 +1,9 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -23,17 +25,21 @@ import org.slf4j.LoggerFactory;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.BlobHashes;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.ExternalBlobMetadata;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.PCloudBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.connection.RedisClientProvider;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
+import com.google.common.hash.Hashing;
 import com.lambdaworks.redis.KeyScanCursor;
 import com.lambdaworks.redis.RedisConnection;
 import com.lambdaworks.redis.ScanArgs;
 import com.lambdaworks.redis.ScanCursor;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
+import com.pcloud.sdk.DataSource;
 import com.pcloud.sdk.RemoteEntry;
 import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
+import com.pcloud.sdk.UploadOptions;
 
 public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisMetadataStrategyImpl.class);
@@ -47,17 +53,26 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
 
     private final String redisKeyPrefix;
 
+    private final String metadataFolder;
+    private final long metadataFolderId;
+    private final String baseDirectory;
+
     private final ApiClient apiClient;
 
     @Inject
     protected RedisMetadataStrategyImpl( //
             @Named(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE) boolean active, //
             @Named(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING) String redis, //
+            @Named(PCloudConstants.PROPERTY_USERMETADATA_FOLDER) String metadataFolder, //
+            @Named(PCloudConstants.PROPERTY_BASEDIR) String baseDir, //
             ApiClient apiClient //
     ) {
         this.active = active;
         this.redisConnection = new RedisClientProvider(redis).get();
         this.apiClient = apiClient;
+        this.baseDirectory = baseDir;
+        this.metadataFolder = metadataFolder;
+        this.metadataFolderId = PCloudUtils.createBaseDirectory(this.apiClient, metadataFolder).folderId();
 
         // We need to distinguish between different users in the cache
         try {
@@ -66,6 +81,33 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         } catch (IOException | ApiError e) {
             throw new RuntimeException(e);
         }
+
+        populateCache();
+    }
+
+    /**
+     * Executed in the background, this method populates the cache from persisted
+     * files in the metadata folder
+     */
+    private void populateCache() {
+        PCloudUtils.execute(this.apiClient.loadFolder(metadataFolderId)).thenApplyAsync(rf -> {
+            for (RemoteEntry re : rf.children()) {
+                if (re.isFile()) {
+                    // There should be only files in the folder, but just to be sure
+                    try {
+                        final ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(re.asFile());
+                        final String k = getRedisKey(blobMetadata.container(), blobMetadata.key());
+                        final String v = blobMetadata.toJson();
+                        this.redisConnection.set(k, v);
+                        LOGGER.debug("Added metadata for blob {}/{} from remote to cache", blobMetadata.container(),
+                                blobMetadata.key());
+                    } catch (Exception e) {
+                        LOGGER.warn("Malformed metadata file {}: {}", re.name(), e);
+                    }
+                }
+            }
+            return null;
+        });
     }
 
     /**
@@ -82,40 +124,149 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     @Override
     public CompletableFuture<ExternalBlobMetadata> get(String container, String key) {
         if (active) {
-            return CompletableFuture.supplyAsync(() -> {
-                String k = getRedisKey(container, key);
-
-                String v = this.redisConnection.get(k);
-
-                if (v != null) {
-                    ExternalBlobMetadata md = ExternalBlobMetadata.fromJSON(v);
-                    LOGGER.debug("Found metadata for {}/{} -> {}", container, key, md);
-                    return md;
-                } else {
-                    LOGGER.debug("No metadata found for {}/{}", container, key);
-                    return null;
-                }
-            });
+            return this.getFromCache(container, key)
+                    .thenCompose(ebm -> {
+                        if (ebm != null) {
+                            // Data found in local cache
+                            return CompletableFuture.completedFuture(ebm);
+                        } else {
+                            // Data not found in local cache, try remote metadata folder
+                            return this.getFromMetadataFolder(container, key);
+                        }
+                    }) //
+                    .thenCompose(ebm -> {
+                        if (ebm != null) {
+                            // Data found in remote metadatafolder,
+                            return CompletableFuture.completedFuture(ebm);
+                        } else {
+                            // Data not found in remote folder, restore from file content
+                            return this.getFromFile(container, key);
+                        }
+                    });
         } else {
             return CompletableFuture.completedFuture(ExternalBlobMetadata.EMPTY_METADATA);
+        }
+    }
+
+    /**
+     * Tries to find the metadata for blob in the redis cache
+     * 
+     * @param container Container of the blob
+     * @param key       Key of the blob
+     * @return
+     */
+    private CompletableFuture<ExternalBlobMetadata> getFromCache(String container, String key) {
+        return CompletableFuture.supplyAsync(() -> {
+            String k = getRedisKey(container, key);
+
+            String v = this.redisConnection.get(k);
+
+            if (v != null) {
+                ExternalBlobMetadata md = ExternalBlobMetadata.fromJSON(v);
+                LOGGER.debug("Found metadata for {}/{} in cache-> {}", container, key, md);
+                return md;
+            } else {
+                LOGGER.debug("No metadata found for {}/{} in cache", container, key);
+                return null;
+            }
+        });
+    }
+
+    /**
+     * Gets the name of the file to store metadata on the backend.
+     * 
+     * @param container Container of the blob
+     * @param key       Key of the blob
+     * @return
+     */
+    @SuppressWarnings("deprecation")
+    private String getMetadataFileName(String container, String key) {
+        return "BLOB" + Hashing.md5().hashString(container + SEPARATOR + key, StandardCharsets.UTF_8).toString()
+                + ".json";
+    }
+
+    /**
+     * Reads the metadata file from the {@link #metadataFolder}
+     * 
+     * @param container Container of the blob
+     * @param key       Key of the blob
+     * @return {@link ExternalBlobMetadata} (if found)
+     */
+    private CompletableFuture<ExternalBlobMetadata> getFromMetadataFolder(String container, String key) {
+        String filename = getMetadataFileName(container, key);
+        return PCloudUtils.execute(this.apiClient.loadFile(metadataFolder + SEPARATOR + filename))
+                .thenApplyAsync(rf -> {
+                    try {
+                        final ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(rf);
+                        final String k = getRedisKey(container, key);
+                        final String v = blobMetadata.toJson();
+                        this.redisConnection.set(k, v);
+                        return blobMetadata;
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                }).exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> null));
+    }
+
+    /**
+     * Creates a PCloud path to the target object starting with the
+     * {@link #baseDirectory}.
+     * 
+     * @param content Path parts
+     * @return Path
+     */
+    private String createPath(String... content) {
+        if (content != null && content.length > 0) {
+            return this.baseDirectory + SEPARATOR
+                    + Arrays.asList(content).stream().collect(Collectors.joining(SEPARATOR));
+        } else {
+            return this.baseDirectory;
+        }
+    }
+
+    /**
+     * If no metadata is found, check if the file exists at all, and create some
+     * barebones metadata for it
+     * 
+     * @param container Container of the blob
+     * @param key       Key of the blob
+     * @return {@link ExternalBlobMetadata} (if found)
+     */
+    private CompletableFuture<ExternalBlobMetadata> getFromFile(String container, String key) {
+        String filename = createPath(container, key);
+        if (filename.endsWith(SEPARATOR)) {
+            // This is a folder blob
+            return PCloudUtils.execute(this.apiClient.loadFolder(PCloudBlobStore.stripDirectorySuffix(filename)))
+                    .thenCompose(
+                            rf -> this.restoreMetadata(container, key, BlobAccess.PRIVATE, Collections.emptyMap(), rf))
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> null));
+        } else {
+            // This is a file blob
+            return PCloudUtils.execute(this.apiClient.loadFile(filename))
+                    .thenCompose(
+                            rf -> this.restoreMetadata(container, key, BlobAccess.PRIVATE, Collections.emptyMap(), rf))
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> null));
         }
     }
 
     @Override
     public CompletableFuture<Void> put(String container, String key, ExternalBlobMetadata metadata) {
         if (active) {
-            return CompletableFuture.supplyAsync(() -> {
-                final String k = getRedisKey(container, key);
-
-                if (metadata != null) {
-                    final String v = metadata.toJson();
-                    LOGGER.debug("Set metadata {} for {}/{}", metadata, container, key);
-                    this.redisConnection.set(k, v);
-                } else {
-                    this.redisConnection.del(k);
-                }
-                return null;
-            });
+            if (metadata != null) {
+                final String filename = getMetadataFileName(container, key);
+                final String json = metadata.toJson();
+                return PCloudUtils
+                        .execute(this.apiClient.createFile(metadataFolderId, filename,
+                                DataSource.create(json.getBytes(StandardCharsets.UTF_8)), UploadOptions.OVERRIDE_FILE))
+                        .thenApplyAsync(rf -> {
+                            // File uploaded, now set cache
+                            final String k = getRedisKey(container, key);
+                            this.redisConnection.set(k, json);
+                            return null;
+                        });
+            } else {
+                return delete(container, key);
+            }
         } else {
             return CompletableFuture.completedFuture(null);
         }
@@ -124,7 +275,9 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     @Override
     public CompletableFuture<Void> delete(String container, String key) {
         if (active) {
-            return CompletableFuture.supplyAsync(() -> {
+            final String filename = getMetadataFileName(container, key);
+
+            return PCloudUtils.execute(this.apiClient.deleteFile(filename)).thenApplyAsync(s -> {
                 final String k = getRedisKey(container, key);
                 LOGGER.debug("Delete metadata for {}/{}", container, key);
                 this.redisConnection.del(k);

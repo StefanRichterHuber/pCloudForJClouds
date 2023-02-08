@@ -38,11 +38,6 @@ public class PCloudConstants {
      */
     public static final String PROPERTY_USERMETADATA_FOLDER = "jclouds.pcloud.usermetadata.folder";
 
-    /**
-     * Automatic restore of metadata cache enabled
-     */
-    public static final String PROPERTY_AUTOMATIC_RESTORE_OF_METADATA_CACHE = "jclouds.pcloud.usermetadata.autorestore";
-
     private PCloudConstants() {
         throw new AssertionError("intentionally unimplemented");
     }

@@ -30,6 +30,7 @@ import org.jclouds.blobstore.domain.MultipartUpload;
 import org.jclouds.blobstore.domain.MutableBlobMetadata;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageMetadata;
+import org.jclouds.blobstore.domain.StorageType;
 import org.jclouds.blobstore.options.CopyOptions;
 import org.jclouds.blobstore.options.GetOptions;
 import org.jclouds.blobstore.options.ListContainerOptions;
@@ -63,13 +64,12 @@ public class PCloudForJCloudTest {
     @Before
     public void setup() throws InterruptedException {
         final String token = System.getenv("PCLOUD_TOKEN");
-
         Properties properties = new Properties();
         properties.setProperty(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING,
                 String.format("redis://%s:%d", redis.getHost(), redis.getFirstMappedPort()));
         properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
         properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, token);
-        properties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "test-metadata");
+        properties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/test-metadata");
         // Either api.pcloud.com or eapi.pcloud.com for European accounts
         properties.setProperty(Constants.PROPERTY_ENDPOINT, PCloudUtils.testForAPIEndpoint(token).orNull());
 
@@ -107,6 +107,22 @@ public class PCloudForJCloudTest {
         Thread.sleep(TIME_TO_WAIT);
         // Container should not exist in the end
         assertFalse(blobStore.containerExists(container));
+    }
+
+    @Test
+    public void shouldCreateAndDestroyDirectory() throws InterruptedException {
+        String dir = UUID.randomUUID().toString() + "/";
+        assertFalse(blobStore.blobExists(container, dir));
+        blobStore.putBlob(container, blobStore.blobBuilder(dir).type(StorageType.FOLDER).build());
+
+        Thread.sleep(1000);
+
+        assertTrue(blobStore.blobExists(container, dir));
+        Blob result = blobStore.getBlob(container, dir);
+        assertNotNull(result);
+
+        blobStore.removeBlob(container, dir);
+        assertFalse(blobStore.blobExists(container, dir));
     }
 
     @Test
@@ -220,7 +236,8 @@ public class PCloudForJCloudTest {
         // Download content
         Blob result = blobStore.getBlob(container, blobName, GetOptions.Builder.ifETagMatches(etag));
         assertNotNull(result);
-        String resultContent = IOUtils.toString(result.getPayload().openStream(), StandardCharsets.UTF_8.name());
+        String resultContent = IOUtils.toString(result.getPayload().openStream(),
+                StandardCharsets.UTF_8.name());
         assertEquals("Content should be equal", blobContent, resultContent);
         assertEquals(md, result.getMetadata().getUserMetadata());
         // Delete blob
@@ -264,9 +281,11 @@ public class PCloudForJCloudTest {
 
         // Content should by the same
 
-        Blob result = blobStore.getBlob(container, targetBlobName, GetOptions.Builder.ifETagMatches(targetEtag));
+        Blob result = blobStore.getBlob(container, targetBlobName,
+                GetOptions.Builder.ifETagMatches(targetEtag));
         assertNotNull(result);
-        String resultContent = IOUtils.toString(result.getPayload().openStream(), StandardCharsets.UTF_8.name());
+        String resultContent = IOUtils.toString(result.getPayload().openStream(),
+                StandardCharsets.UTF_8.name());
         assertEquals("Content should be equal", blobContent, resultContent);
         assertEquals(md, result.getMetadata().getUserMetadata());
 
@@ -278,7 +297,8 @@ public class PCloudForJCloudTest {
     @Test
     public void shouldSupportMultiPartUpload() throws InterruptedException, IOException {
         List<String> content = Arrays.asList("O rose, thou art sick!\r\n", "The invisible worm,\r\n",
-                "That flies in the night,\r\n", "In the howling storm.\r\n", "Has found out thy bed\r\n",
+                "That flies in the night,\r\n", "In the howling storm.\r\n",
+                "Has found out thy bed\r\n",
                 "Of crimson joy,\r\n", "And his dark secret love\r\n", "Does thy life destroy.");
         String mergedContent = content.stream().collect(Collectors.joining());
         String blobName = UUID.randomUUID().toString() + ".txt";
@@ -288,12 +308,14 @@ public class PCloudForJCloudTest {
         LOGGER.info("Uploading to blob {} in container {}", blobName, container);
 
         MutableBlobMetadata metaData = blobStore.blobBuilder(blobName).payload(mergedContent)
-                .contentLength(mergedContent.getBytes(Charsets.UTF_8).length).userMetadata(md).build().getMetadata();
+                .contentLength(mergedContent.getBytes(Charsets.UTF_8).length).userMetadata(md).build()
+                .getMetadata();
         MultipartUpload multipartUpload = blobStore.initiateMultipartUpload(container, metaData, null);
         assertNotNull(multipartUpload);
 
         for (int i = 0; i < content.size(); i++) {
-            blobStore.uploadMultipartPart(multipartUpload, i + 1, Payloads.newStringPayload(content.get(i)));
+            blobStore.uploadMultipartPart(multipartUpload, i + 1,
+                    Payloads.newStringPayload(content.get(i)));
             Thread.sleep(100);
         }
         String etag = blobStore.completeMultipartUpload(multipartUpload, null);
@@ -324,7 +346,8 @@ public class PCloudForJCloudTest {
 
     public void shouldSupportMultiPartUploadWithRandomOrder() throws InterruptedException, IOException {
         List<String> content = Arrays.asList("O rose, thou art sick!\r\n", "The invisible worm,\r\n",
-                "That flies in the night,\r\n", "In the howling storm.\r\n", "Has found out thy bed\r\n",
+                "That flies in the night,\r\n", "In the howling storm.\r\n",
+                "Has found out thy bed\r\n",
                 "Of crimson joy,\r\n", "And his dark secret love\r\n", "Does thy life destroy.");
         String mergedContent = content.stream().collect(Collectors.joining());
         long contentLength = mergedContent.getBytes(Charsets.UTF_8).length;
@@ -340,7 +363,8 @@ public class PCloudForJCloudTest {
         int[] order = { 0, 2, 4, 7, 6, 1, 3, 5 };
         for (int o = 0; o < order.length; o++) {
             int i = order[o];
-            blobStore.uploadMultipartPart(multipartUpload, i + 1, Payloads.newStringPayload(content.get(i)));
+            blobStore.uploadMultipartPart(multipartUpload, i + 1,
+                    Payloads.newStringPayload(content.get(i)));
             Thread.sleep(1000);
         }
 
@@ -379,7 +403,8 @@ public class PCloudForJCloudTest {
          * Should list only the files directly in the container
          */
         {
-            PageSet<? extends StorageMetadata> pageSet = blobStore.list(container, ListContainerOptions.NONE);
+            PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
+                    ListContainerOptions.NONE);
             assertEquals(2, pageSet.size());
             List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
             assertTrue(names.containsAll(Arrays.asList(blobName1, blobName2)));
@@ -445,7 +470,8 @@ public class PCloudForJCloudTest {
          * Should list all files
          */
         {
-            PageSet<? extends StorageMetadata> pageSet = blobStore.list(container, ListContainerOptions.NONE);
+            PageSet<? extends StorageMetadata> pageSet = blobStore.list(container,
+                    ListContainerOptions.NONE);
             assertEquals(TEST_FILES, pageSet.size());
             List<String> names = pageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList());
             assertTrue(names.containsAll(blobNames));
@@ -473,7 +499,8 @@ public class PCloudForJCloudTest {
             assertNotNull(firstPageSet.getNextMarker());
 
             PageSet<? extends StorageMetadata> secondPageSet = blobStore.list(container,
-                    ListContainerOptions.Builder.maxResults(TEST_FILES / 2).afterMarker(firstPageSet.getNextMarker()));
+                    ListContainerOptions.Builder.maxResults(TEST_FILES / 2)
+                            .afterMarker(firstPageSet.getNextMarker()));
             assertEquals(TEST_FILES / 2, secondPageSet.size());
 
             Set<String> names = new HashSet<>();
