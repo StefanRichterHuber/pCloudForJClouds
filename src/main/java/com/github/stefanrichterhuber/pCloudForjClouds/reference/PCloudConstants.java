@@ -47,7 +47,7 @@ public class PCloudConstants {
     /**
      * Interval in minutes the metadata folder is checked for orphaned entries
      * (metadata entries without corresponding file / folder)
-     * if negative or 0, no scan occurs
+     * if negative no scan is started. If 0, only one scan is started.
      */
     public static final String PROPERTY_SANITIZE_METADATA_INTERVAL_MIN = COMMON_PREFIX
             + "usermetadata.sanitize.interval";
@@ -55,7 +55,7 @@ public class PCloudConstants {
     /**
      * Interval in minutes the content of the metadatafolder is synchronized with
      * the local cache.
-     * if negative or 0, no sync occurs.
+     * if negative no sync occours. If 0, only one sync at startup is executed.
      */
     public static final String PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN = COMMON_PREFIX
             + "usermetadata.synchronize.interval";

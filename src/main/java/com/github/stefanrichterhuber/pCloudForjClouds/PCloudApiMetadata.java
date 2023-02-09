@@ -30,8 +30,8 @@ public class PCloudApiMetadata extends BaseApiMetadata {
         Properties properties = BaseHttpApiMetadata.defaultProperties();
         properties.put(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE, true);
         properties.put(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/S3-metadata");
-        properties.put(PCloudConstants.PROPERTY_SANITIZE_METADATA_INTERVAL_MIN, "60");
-        properties.put(PCloudConstants.PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN, "10");
+        properties.put(PCloudConstants.PROPERTY_SANITIZE_METADATA_INTERVAL_MIN, "-1");
+        properties.put(PCloudConstants.PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN, "0");
         return properties;
     }
 

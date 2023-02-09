@@ -126,12 +126,19 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             service.scheduleAtFixedRate(() -> this.sanitizeMetadataFiles().join(), sanitizeInterval, sanitizeInterval,
                     TimeUnit.MINUTES);
         }
+        if (sanitizeInterval == 0) {
+            // Schedule the sanitize job
+            service.schedule(() -> sanitizeMetadataFiles().join(), 5, TimeUnit.MINUTES);
+        }
         if (synchronizeInterval > 0) {
             // Run once immediately, then every 5 minutes or so
             service.scheduleAtFixedRate(() -> this.loadMetadataDiffs(httpClient, apiHost, gson).join(), 0,
                     synchronizeInterval,
                     TimeUnit.MINUTES);
 
+        }
+        if (synchronizeInterval == 0) {
+            service.schedule(() -> this.loadMetadataDiffs(httpClient, apiHost, gson).join(), 0, TimeUnit.MINUTES);
         }
 
     }
@@ -147,11 +154,15 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      */
     private CompletableFuture<Void> loadMetadataDiffs(OkHttpClient httpClient, HttpUrl apiHost, Gson gson) {
         final String diffId = this.redisConnection.get(REDIS_KEY_LAST_DIFF);
+        LOGGER.info("Start syncing metadata files since {}", diffId);
         return loadMetadataDiffs(diffId, httpClient, apiHost, gson)
                 // Ignore errors in the run and hope for the next
                 .exceptionally(e -> {
                     LOGGER.warn("Error during fetching metadata: {}", e);
                     return null;
+                })
+                .thenAccept(v -> {
+                    LOGGER.info("Finished syncing metadata files");
                 });
     }
 
@@ -207,6 +218,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @return
      */
     private CompletableFuture<Void> sanitizeMetadataFiles() {
+        LOGGER.info("Start sanitizing metadatafiles");
         return PCloudUtils.execute(this.apiClient.listFolder(metadataFolderId)).thenCompose(rf -> {
             final List<CompletableFuture<Void>> jobs = new ArrayList<>();
             for (RemoteEntry re : rf.children()) {
@@ -224,6 +236,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                         return null;
                     })
                     .thenApply(v -> null);
+        }).thenAccept(v -> {
+            LOGGER.info("Finished sanitizing metadatafiles");
         });
     }
 

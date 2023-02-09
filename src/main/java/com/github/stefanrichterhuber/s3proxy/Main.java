@@ -57,6 +57,8 @@ public class Main implements Callable<Integer> {
         blobStoreProperties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
         blobStoreProperties.setProperty(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING, "redis://redis:6379");
         blobStoreProperties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/S3-metadata");
+        blobStoreProperties.put(PCloudConstants.PROPERTY_SANITIZE_METADATA_INTERVAL_MIN, "-1");
+        blobStoreProperties.put(PCloudConstants.PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN, "0");
         // Second: values from environment
         blobStoreProperties.putAll(PCloudConstants.fromEnv());
         // Third: Values from command line parameters
@@ -71,7 +73,9 @@ public class Main implements Callable<Integer> {
             LOGGER.info(
                     "Configuration determined from default values, environment variables and command-line parameters:");
             for (var e : blobStoreProperties.entrySet()) {
-                LOGGER.info("    {}: {}", e.getKey(), e.getValue());
+                LOGGER.info("    {} ({}): {}", e.getKey(),
+                        e.getKey().toString().toUpperCase().replace('.', '_'),
+                        e.getValue());
             }
         }
 
