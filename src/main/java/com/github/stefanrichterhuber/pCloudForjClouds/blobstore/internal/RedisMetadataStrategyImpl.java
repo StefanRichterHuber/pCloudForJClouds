@@ -76,6 +76,9 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private final long metadataFolderId;
     private final String baseDirectory;
 
+    private final int sanitizeInterval;
+    private final int synchronizeInterval;
+
     private final ApiClient apiClient;
 
     @Inject
@@ -83,6 +86,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             @Named(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE) boolean active, //
             @Named(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING) String redis, //
             @Named(PCloudConstants.PROPERTY_USERMETADATA_FOLDER) String metadataFolder, //
+            @Named(PCloudConstants.PROPERTY_SANITIZE_METADATA_INTERVAL_MIN) int sanitizeInterval, //
+            @Named(PCloudConstants.PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN) int synchronizeInterval, //
             @Named(PCloudConstants.PROPERTY_BASEDIR) String baseDir, //
             ApiClient apiClient //
     ) {
@@ -92,6 +97,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         this.baseDirectory = baseDir;
         this.metadataFolder = metadataFolder;
         this.metadataFolderId = PCloudUtils.createBaseDirectory(this.apiClient, metadataFolder).folderId();
+        this.sanitizeInterval = sanitizeInterval;
+        this.synchronizeInterval = synchronizeInterval;
 
         // We need to distinguish between different users in the cache
         try {
@@ -114,9 +121,19 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                 .setDateFormat("EEE, dd MMM yyyy HH:mm:ss zzzz").create();
 
         final ScheduledExecutorService service = Executors.newScheduledThreadPool(1);
-        // Run once immediately, then every 30s
-        service.scheduleAtFixedRate(() -> this.loadMetadataDiffs(httpClient, apiHost, gson), 0, 30,
-                TimeUnit.SECONDS);
+
+        if (sanitizeInterval > 0) {
+            service.scheduleAtFixedRate(() -> this.sanitizeMetadataFiles().join(), sanitizeInterval, sanitizeInterval,
+                    TimeUnit.MINUTES);
+        }
+        if (synchronizeInterval > 0) {
+            // Run once immediately, then every 5 minutes or so
+            service.scheduleAtFixedRate(() -> this.loadMetadataDiffs(httpClient, apiHost, gson).join(), 0,
+                    synchronizeInterval,
+                    TimeUnit.MINUTES);
+
+        }
+
     }
 
     /**
@@ -183,6 +200,88 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     }
 
     /**
+     * Checks all files in the metadata folder, if the corresponding file still
+     * exists
+     * If not, the metadatafile and the local cache entry for the file is deleted.
+     * 
+     * @return
+     */
+    private CompletableFuture<Void> sanitizeMetadataFiles() {
+        return PCloudUtils.execute(this.apiClient.listFolder(metadataFolderId)).thenCompose(rf -> {
+            final List<CompletableFuture<Void>> jobs = new ArrayList<>();
+            for (RemoteEntry re : rf.children()) {
+                // There should be only files here, but just in case
+                if (re.isFile()) {
+                    jobs.add(sanitizeMetadataFile(re.asFile()));
+                } else {
+                    LOGGER.warn("There should not be any folders in the metadata folder: {}", re.name());
+                }
+            }
+            return PCloudUtils.allOf(jobs)
+                    .exceptionally(e -> {
+                        // Ignore error and try again next time.
+                        LOGGER.warn("Error during sanitizing metadata: {}", e);
+                        return null;
+                    })
+                    .thenApply(v -> null);
+        });
+    }
+
+    /**
+     * Checks if the file for the given metadata file still exists. If not, the
+     * metadata file (and the corresponding cache entry) is deleted.
+     * 
+     * @param metadataFile {@link RemoteFile} of the metadata file to check
+     * @return {@link CompletableFuture} of the async operation.
+     */
+    private CompletableFuture<Void> sanitizeMetadataFile(RemoteFile metadataFile) {
+        return CompletableFuture.supplyAsync(() -> {
+            // Read metadata from file
+            try {
+                ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(metadataFile);
+                return blobMetadata;
+            } catch (IOException e) {
+                LOGGER.warn("Ill formed metadata file {}", metadataFile.name());
+                throw new RuntimeException(e);
+            }
+        }).thenCompose(ebm -> {
+            // Check if file / folder still exists
+            CompletableFuture<? extends RemoteEntry> target = null;
+
+            if (ebm.storageType() == StorageType.BLOB) {
+                target = PCloudUtils.execute(this.apiClient.loadFile(ebm.fileId()));
+            } else {
+                target = PCloudUtils.execute(this.apiClient.loadFolder(ebm.fileId()));
+            }
+
+            return target.exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> null)) //
+                    .thenCompose(v -> {
+                        // If folder / file still exists value is non-null, other wise its null
+                        if (v == null) {
+                            return PCloudUtils.execute(this.apiClient.deleteFile(metadataFile)).thenApply(s -> {
+                                LOGGER.info("Deleted orphaned metadata file {}", metadataFile.name());
+                                final String k = getRedisKey(ebm.container(), ebm.key());
+                                this.redisConnection.del(k);
+                                return null;
+                            });
+                        } else {
+                            // File still exists, everything is fine, just check if it has the correct file
+                            // name (Support for future changes of nameing schema)
+                            final String canonicalFilename = this.getMetadataFileName(ebm.container(),
+                                    ebm.key());
+                            if (!metadataFile.name().equals(canonicalFilename)) {
+                                LOGGER.info("Renamed metadata file {} to canonical name {}", metadataFile.name(),
+                                        canonicalFilename);
+                                return PCloudUtils.execute(this.apiClient.rename(metadataFile, canonicalFilename))
+                                        .thenApply(r -> null);
+                            }
+                            return CompletableFuture.completedFuture(null);
+                        }
+                    });
+        });
+    }
+
+    /**
      * Takes a {@link List} of {@link DiffEntry}s and collects the ones being file
      * events in the metadata folder. For each file only the latest event is
      * collected.
@@ -228,14 +327,6 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                             this.redisConnection.set(k, v);
                             LOGGER.debug("Added metadata for blob {}/{} from remote to cache", blobMetadata.container(),
                                     blobMetadata.key());
-
-                            final String canonicalFilename = this.getMetadataFileName(blobMetadata.container(),
-                                    blobMetadata.key());
-                            if (!re.name().equals(canonicalFilename)) {
-                                // Support for future changes of nameing schema
-                                LOGGER.info("Renamed metadata file {} -> {}", re.name(), canonicalFilename);
-                                re.rename(canonicalFilename);
-                            }
                         } catch (IOException e) {
                             throw new RuntimeException(e);
                         }

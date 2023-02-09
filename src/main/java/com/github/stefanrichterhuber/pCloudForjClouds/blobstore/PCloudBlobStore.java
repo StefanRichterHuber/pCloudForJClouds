@@ -618,7 +618,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
         this.pCloudContainerNameValidator.validate(container);
         RemoteFolder remoteFolder = this.remoteFolderCache.compute(container, this::checkOrFetchFolder);
-        LOGGER.info("Does container {} exists -> {}", container, remoteFolder != null);
+        LOGGER.debug("Does container {} exists -> {}", container, remoteFolder != null);
         return remoteFolder != null;
     }
 
