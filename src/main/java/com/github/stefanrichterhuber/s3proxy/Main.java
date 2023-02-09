@@ -19,12 +19,15 @@ public class Main implements Callable<Integer> {
     private String endpoint = "127.0.0.1:8080";
 
     @Option(names = { "-b",
-            "--basedir" }, description = "Folder in pCloud containing all containers", defaultValue = "/S3")
-    private String baseDir = "/S3";
+            "--basedir" }, description = "Folder in pCloud containing all containers")
+    private String baseDir;
+
+    @Option(names = { "-m", "--metadata" }, description = "Folder in pCloud containing the metadata")
+    private String metadataDir;
 
     @Option(names = { "-r",
-            "--redis" }, description = "redis connect string e.g. redis://localhost:6379", defaultValue = "redis://redis:6379")
-    private String redis = "redis://redis:6379";
+            "--redis" }, description = "redis connect string e.g. redis://localhost:6379")
+    private String redis;
 
     @Option(names = "--verbose", negatable = true, description = "Verbose output")
     boolean verbose;
@@ -43,12 +46,33 @@ public class Main implements Callable<Integer> {
                 .getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
         root.setLevel(verbose ? Level.DEBUG : Level.INFO);
 
+        ch.qos.logback.classic.Logger LOGGER = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+                .getLogger(Main.class);
+
         /*
          * Configure S3 Proxy
          */
         final Properties blobStoreProperties = new Properties();
-        blobStoreProperties.setProperty(PCloudConstants.PROPERTY_BASEDIR, baseDir);
-        blobStoreProperties.setProperty(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING, redis);
+        // First: default values
+        blobStoreProperties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
+        blobStoreProperties.setProperty(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING, "redis://redis:6379");
+        blobStoreProperties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/S3-metadata");
+        // Second: values from environment
+        blobStoreProperties.putAll(PCloudConstants.fromEnv());
+        // Third: Values from command line parameters
+        if (baseDir != null)
+            blobStoreProperties.setProperty(PCloudConstants.PROPERTY_BASEDIR, baseDir);
+        if (redis != null)
+            blobStoreProperties.setProperty(PCloudConstants.PROPERTY_REDIS_CONNECT_STRING, redis);
+        if (metadataDir != null)
+            blobStoreProperties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, baseDir);
+
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("Configuration determined from default values, environment and command-line parameters:");
+            for (var e : blobStoreProperties.entrySet()) {
+                LOGGER.info("    {}: {}", e.getKey(), e.getValue());
+            }
+        }
 
         final S3Proxy s3Proxy = S3Proxy.builder() //
                 .endpoint(URI.create("http://" + endpoint)) //
@@ -92,5 +116,4 @@ public class Main implements Callable<Integer> {
             Thread.sleep(10000);
         }
     }
-
 }
