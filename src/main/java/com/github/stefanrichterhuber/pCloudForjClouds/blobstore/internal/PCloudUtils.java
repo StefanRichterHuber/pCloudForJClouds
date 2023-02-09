@@ -55,7 +55,6 @@ public final class PCloudUtils {
      */
     public static <T> CompletableFuture<T> execute(Call<T> call) {
         final CompletableFuture<T> result = new CompletableFuture<T>();
-
         call.enqueue(new Callback<T>() {
 
             @Override
@@ -255,7 +254,7 @@ public final class PCloudUtils {
      * @param block     Block until an event arrives
      * @return
      */
-    public static CompletableFuture<DiffResponse> getDiff(ApiClient apiClient, Integer diffId, Integer limit,
+    public static CompletableFuture<DiffResponse> getDiff(ApiClient apiClient, Long diffId, Integer limit,
             boolean block) {
         var apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
         var httpClient = PCloudUtils.getHTTPClient(apiClient);
@@ -267,7 +266,7 @@ public final class PCloudUtils {
                 .addPathSegment("diff") //
         ;
         if (diffId != null) {
-            urlBuilder = urlBuilder.addQueryParameter("diffid", Integer.toString(diffId));
+            urlBuilder = urlBuilder.addQueryParameter("diffid", Long.toString(diffId));
         }
         if (limit != null) {
             urlBuilder = urlBuilder.addQueryParameter("limit", Integer.toString(limit));

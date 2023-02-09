@@ -1,19 +1,26 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 import javax.inject.Named;
+import javax.inject.Singleton;
 
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.PageSet;
@@ -27,9 +34,13 @@ import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.BlobHashes;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.ExternalBlobMetadata;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.PCloudBlobStore;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.DiffResponse.DiffEntry;
 import com.github.stefanrichterhuber.pCloudForjClouds.connection.RedisClientProvider;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.common.hash.Hashing;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.stream.JsonReader;
 import com.lambdaworks.redis.KeyScanCursor;
 import com.lambdaworks.redis.RedisConnection;
 import com.lambdaworks.redis.ScanArgs;
@@ -42,6 +53,12 @@ import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
 import com.pcloud.sdk.UploadOptions;
 
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
+@Singleton
 public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisMetadataStrategyImpl.class);
 
@@ -51,6 +68,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
 
     private final RedisConnection<String, String> redisConnection;
     private static final String REDIS_PREFIX = "PCloudBlobStore:";
+    private static final String REDIS_KEY_LAST_DIFF = "PCloudBlobStore-last-diff";
 
     private final String redisKeyPrefix;
 
@@ -83,22 +101,128 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             throw new RuntimeException(e);
         }
 
-        populateCache();
+        syncMetadataCache();
     }
 
     /**
-     * Executed in the background, this method populates the cache from persisted
-     * files in the metadata folder
+     * Synchronizes the remote metadata folder regularly with the local cache
      */
-    private void populateCache() {
-        LOGGER.info("Started populating cache ...");
-        PCloudUtils.execute(this.apiClient.listFolder(metadataFolderId)).thenApplyAsync(rf -> {
-            for (RemoteEntry re : rf.children()) {
-                if (re.isFile()) {
-                    ForkJoinPool.commonPool().execute(() -> {
-                        // There should be only files in the folder, but just to be sure
+    private void syncMetadataCache() {
+        OkHttpClient httpClient = PCloudUtils.getHTTPClient(apiClient);
+        HttpUrl apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
+        final Gson gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation()
+                .setDateFormat("EEE, dd MMM yyyy HH:mm:ss zzzz").create();
+
+        final ScheduledExecutorService service = Executors.newScheduledThreadPool(1);
+        // Run once immediately, then every 30s
+        service.scheduleAtFixedRate(() -> this.loadMetadataDiffs(httpClient, apiHost, gson), 0, 30,
+                TimeUnit.SECONDS);
+    }
+
+    /**
+     * Load all currently available diffs from the pCloud backend since the latest
+     * diff referenced in the cache (or all if cache is empty), filter for the ones
+     * concerning the metdatafolder and then process these
+     * 
+     * @param httpClient
+     * @param apiHost
+     * @param gson
+     */
+    private CompletableFuture<Void> loadMetadataDiffs(OkHttpClient httpClient, HttpUrl apiHost, Gson gson) {
+        final String diffId = this.redisConnection.get(REDIS_KEY_LAST_DIFF);
+        return loadMetadataDiffs(diffId, httpClient, apiHost, gson)
+                // Ignore errors in the run and hope for the next
+                .exceptionally(e -> {
+                    LOGGER.warn("Error during fetching metadata: {}", e);
+                    return null;
+                });
+    }
+
+    /**
+     * Load all currently available diffs from the pCloud backend since the given
+     * diff , filter for the ones
+     * concerning the metdatafolder and then process these
+     * 
+     * @param diffId     Id of the latest diff already processed, might be null to
+     *                   process all diffs since start
+     * @param httpClient
+     * @param apiHost
+     * @param gson
+     */
+    private CompletableFuture<Void> loadMetadataDiffs(String diffId, OkHttpClient httpClient, HttpUrl apiHost,
+            Gson gson) {
+        HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
+                .addPathSegment("diff");
+        if (diffId != null) {
+            urlBuilder = urlBuilder.addQueryParameter("diffid", diffId);
+        }
+
+        final Request request = new Request.Builder().url(urlBuilder.build()).get().build();
+        return PCloudUtils.execute(httpClient.newCall(request)).thenComposeAsync(resp -> {
+            try (Response response = resp) {
+                final JsonReader reader = new JsonReader(
+                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
+                final DiffResponse r = gson.fromJson(reader, DiffResponse.class);
+
+                final Collection<DiffEntry> applicableEntries = filterForCacheEntries(r.getEntries());
+                final String currentDiffId = Long.toString(r.getDiffid());
+
+                return PCloudUtils
+                        .allOf(applicableEntries.stream().map(this::applyDiff).collect(Collectors.toList()))
+                        .thenCompose(v -> {
+                            this.redisConnection.set(REDIS_KEY_LAST_DIFF, currentDiffId);
+                            if (currentDiffId.equals(diffId)) {
+                                return CompletableFuture.completedFuture(null);
+                            } else {
+                                // Recursivly try next diffid
+                                return loadMetadataDiffs(currentDiffId, httpClient, apiHost, gson);
+                            }
+                        });
+            }
+        });
+    }
+
+    /**
+     * Takes a {@link List} of {@link DiffEntry}s and collects the ones being file
+     * events in the metadata folder. For each file only the latest event is
+     * collected.
+     * 
+     * @param entries {@link DiffEntry}s to filter
+     * @return Filtered {@link DiffEntry}s.
+     */
+    private Collection<DiffEntry> filterForCacheEntries(Collection<DiffEntry> entries) {
+        final Set<String> eventsToCheck = Set.of(DiffEntry.EVENT_CREATEFILE, DiffEntry.EVENT_DELETEFILE,
+                DiffEntry.EVENT_MODIFYFILE);
+        final Map<Long, DiffEntry> applicableEntries = entries.stream()
+                .filter(de -> eventsToCheck.contains(de.getEvent()))
+                .filter(de -> de.getMetadata() != null && !de.getMetadata().isFolder())
+                // Only check for file operations happened in the metadatafolder
+                .filter(de -> de.getMetadata().getParentfolderid() == metadataFolderId)
+                .collect(Collectors.toMap(
+                        v -> v.getMetadata().getFileid(), //
+                        v -> v, //
+                        (v1, v2) -> v2 // Only use the latest entry for the file
+                ));
+        return applicableEntries.values();
+    }
+
+    /**
+     * Load a {@link DiffEntry} to the cache.
+     * 
+     * @param entry {@link DiffEntry} to apply
+     * @return
+     */
+    private CompletableFuture<Void> applyDiff(DiffEntry entry) {
+        if (entry.getEvent().equals(DiffEntry.EVENT_DELETEFILE)) {
+            // FIXME: Can be implemented after migration to a decodable file name of
+            // metadata files
+            return CompletableFuture.completedFuture(null);
+        } else if (entry.getEvent().equals(DiffEntry.EVENT_CREATEFILE)
+                || entry.getEvent().equals(DiffEntry.EVENT_MODIFYFILE)) {
+            return PCloudUtils.execute(this.apiClient.loadFile(entry.getMetadata().getFileid()))
+                    .thenAcceptAsync(re -> {
                         try {
-                            final ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(re.asFile());
+                            final ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(re);
                             final String k = getRedisKey(blobMetadata.container(), blobMetadata.key());
                             final String v = blobMetadata.toJson();
                             this.redisConnection.set(k, v);
@@ -112,16 +236,18 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                                 LOGGER.info("Renamed metadata file {} -> {}", re.name(), canonicalFilename);
                                 re.rename(canonicalFilename);
                             }
-
-                        } catch (Exception e) {
-                            LOGGER.warn("Malformed metadata file {}: {}", re.name(), e);
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
                         }
+                    })
+                    .exceptionally(e -> {
+                        LOGGER.warn("Malformed metadata file {}: {}", entry.getMetadata().getName(), e);
+                        return null;
                     });
-                }
-            }
-            LOGGER.info("Finished populating cache. Loaded {} files.", rf.children().size());
-            return null;
-        });
+        } else {
+            // Unsupported event type
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     /**

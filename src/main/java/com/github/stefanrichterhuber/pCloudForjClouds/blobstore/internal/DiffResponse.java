@@ -141,6 +141,42 @@ public class DiffResponse {
             }
         }
 
+        /**
+         * client should reset it's state to empty root directory
+         */
+        public static final String EVENT_RESET = "reset";
+
+        /**
+         * folder is created, metadata is provided
+         */
+        public static final String EVENT_CREATE_FOLDER = "createfolder";
+
+        /**
+         * folder is deleted, metadata is provided
+         */
+        public static final String EVENT_DELETEFOLDER = "deletefolder";
+
+        /**
+         * folder is modified, metadata is provided
+         */
+        public static final String EVENT_MODIFYFOLDER = "modifyfolder";
+
+        /**
+         * file is created, metadata is provided
+         */
+        public static final String EVENT_CREATEFILE = "createfile";
+
+        /**
+         * file data is modified, metadata is provided (normally modifytime, size and
+         * hash are changed)
+         */
+        public static final String EVENT_MODIFYFILE = "modifyfile";
+
+        /**
+         * file is deleted, metadata is provided
+         */
+        public static final String EVENT_DELETEFILE = "deletefile";
+
         @Expose
         private String event;
         @Expose
@@ -194,7 +230,7 @@ public class DiffResponse {
     @Expose
     private int result;
     @Expose
-    private int diffid;
+    private long diffid;
     @Expose
     private List<DiffEntry> entries;
 
@@ -206,7 +242,7 @@ public class DiffResponse {
         return getResult() == 0;
     }
 
-    public int getDiffid() {
+    public long getDiffid() {
         return diffid;
     }
 
