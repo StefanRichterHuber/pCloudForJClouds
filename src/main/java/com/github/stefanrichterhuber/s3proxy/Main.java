@@ -22,7 +22,7 @@ public class Main implements Callable<Integer> {
             "--basedir" }, description = "Folder in pCloud containing all containers")
     private String baseDir;
 
-    @Option(names = { "-m", "--metadata" }, description = "Folder in pCloud containing the metadata")
+    @Option(names = { "-m", "--metadatadir" }, description = "Folder in pCloud containing the metadata")
     private String metadataDir;
 
     @Option(names = { "-r",
@@ -68,7 +68,8 @@ public class Main implements Callable<Integer> {
             blobStoreProperties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, baseDir);
 
         if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("Configuration determined from default values, environment and command-line parameters:");
+            LOGGER.info(
+                    "Configuration determined from default values, environment variables and command-line parameters:");
             for (var e : blobStoreProperties.entrySet()) {
                 LOGGER.info("    {}: {}", e.getKey(), e.getValue());
             }
