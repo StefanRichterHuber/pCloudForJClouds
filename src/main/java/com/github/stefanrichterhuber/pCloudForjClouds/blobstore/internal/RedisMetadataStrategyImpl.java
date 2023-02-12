@@ -364,6 +364,9 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @return
      */
     private String getRedisKey(String container, String key) {
+        if (key == null) {
+            return redisKeyPrefix + container;
+        }
         return redisKeyPrefix + container + SEPARATOR + key;
     }
 
@@ -427,8 +430,12 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      */
     @SuppressWarnings("deprecation")
     private String getMetadataFileName(String container, String key) {
+
         // TODO change to base64 of filename or something alike with clear text
         // container name
+        if (key == null) {
+            return "CONTAINER." + container + ".json";
+        }
         return "BLOB" + Hashing.md5().hashString(container + SEPARATOR + key, StandardCharsets.UTF_8).toString()
                 + ".json";
     }
@@ -466,7 +473,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private String createPath(String... content) {
         if (content != null && content.length > 0) {
             return this.baseDirectory + SEPARATOR
-                    + Arrays.asList(content).stream().collect(Collectors.joining(SEPARATOR));
+                    + Arrays.asList(content).stream().filter(c -> c != null).collect(Collectors.joining(SEPARATOR));
         } else {
             return this.baseDirectory;
         }
@@ -482,6 +489,14 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      */
     private CompletableFuture<ExternalBlobMetadata> getFromFile(String container, String key) {
         String filename = createPath(container, key);
+        if (key == null) {
+            // This is a container blob
+            return PCloudUtils.execute(this.apiClient.loadFolder(filename))
+                    .thenComposeAsync(
+                            rf -> this.restoreMetadata(container,
+                                    key, BlobAccess.PRIVATE, Collections.emptyMap(), rf))
+                    .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> null));
+        }
         if (filename.endsWith(SEPARATOR)) {
             // This is a folder blob
             return PCloudUtils.execute(this.apiClient.loadFolder(PCloudBlobStore.stripDirectorySuffix(filename)))
@@ -704,7 +719,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             } else {
                 final RemoteFolder folder = entry.asFolder();
                 final ExternalBlobMetadata metadata = new ExternalBlobMetadata(container, key, folder.folderId(),
-                        StorageType.FOLDER, blobAccess, BlobHashes.empty(), usermetadata);
+                        key != null ? StorageType.FOLDER : StorageType.CONTAINER, blobAccess, BlobHashes.empty(),
+                        usermetadata);
 
                 return this.put(container, key, metadata).thenApply(v -> metadata);
             }

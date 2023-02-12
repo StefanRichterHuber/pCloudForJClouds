@@ -122,17 +122,11 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     private final Supplier<Set<? extends Location>> locations;
     private final MultipartUploadFactory multipartUploadFactory;
     private final MetadataStrategy metadataStrategy;
+    private final long baseFolderId;
     /**
      * Currently active multipart uploads, grouped by the id of the upload
      */
     private final Map<String, PCloudMultipartUpload> currentMultipartUploads = new ConcurrentHashMap<>();
-    /**
-     * It is necessary to ensure the existence of the parent folder before
-     * {@link #putBlob(String, Blob, PutOptions)} using
-     * {@link #assureParentFolder(String)}. Since it is inefficient to fetch folders
-     * by path, cache the folder id for each folder accessed.
-     */
-    private final Map<String, RemoteFolder> remoteFolderCache = new ConcurrentHashMap<String, RemoteFolder>();
 
     @Inject
     protected PCloudBlobStore( //
@@ -156,9 +150,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         this.defaultLocation = defaultLocation;
         this.apiClient = checkNotNull(apiClient, "PCloud api client");
         this.multipartUploadFactory = checkNotNull(multipartUploadFactory, "multipartupload factory");
-        RemoteFolder baseFolder = PCloudUtils.createBaseDirectory(this.apiClient, this.baseDirectory);
+        this.baseFolderId = PCloudUtils.createBaseDirectory(this.apiClient, this.baseDirectory).folderId();
         // Directly add the folder to the cache
-        this.remoteFolderCache.put(baseDirectory, baseFolder);
         this.metadataStrategy = checkNotNull(metadataStrategy, "PCloud metadatastrategy");
 
     }
@@ -235,95 +228,42 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     /**
-     * Checks if the directory exists, and creates it if not.
+     * Checks if the parent folder for the blob exists, if not create it
      * 
      * @param dir Directory to create
-     * @return
+     * @return ID of the parent folder for the key
      */
-    private RemoteFolder assureParentFolder(String dir) throws IOException, ApiError {
+    private CompletableFuture<Long> assureParentFolder(String container, String targetKey) {
+        if (targetKey.contains(SEPARATOR)) {
+            final String key = getFolderOfKey(targetKey);
 
-        final RemoteFolder remoteFolder = this.remoteFolderCache.compute(dir, this::checkOrFetchFolder);
-        if (remoteFolder != null) {
-            return remoteFolder;
-        }
-
-        // Remote folder does not exists, check for its parent
-        final String parentDir = dir.substring(0, dir.lastIndexOf(SEPARATOR));
-        final RemoteFolder parentFolder = assureParentFolder(parentDir);
-
-        // Now check again and create folder if still necessary
-        final RemoteFolder result = this.remoteFolderCache.computeIfAbsent(dir,
-                k -> this.createOrFetchFolder(parentFolder.folderId(), k));
-        return result;
-    }
-
-    /**
-     * Tries to create the given folder. If it fails because the backend already
-     * knows the folder, fetch it.
-     * 
-     * @param dir
-     * @param parentFolderId Id of the parent folder
-     * @return
-     */
-    private RemoteFolder createOrFetchFolder(long parentFolderId, String dir) {
-        final String name = dir.substring(dir.lastIndexOf(SEPARATOR) + 1);
-        try {
-            final RemoteFolder rf = this.apiClient.createFolder(parentFolderId, name).execute();
-            if (rf != null) {
-                LOGGER.info("Parent folder {} with id {} created!", dir, rf.folderId());
-            }
-            return rf;
-        } catch (ApiError e) {
-            final PCloudError pCloudError = PCloudError.parse(e);
-            if (pCloudError == PCloudError.ALREADY_EXISTS) {
-                // File already exists, try to fetch it from the parent folder
-                try {
-                    RemoteFolder remoteFolder = this.apiClient.loadFolder(parentFolderId).execute().children().stream()
-                            .filter(RemoteEntry::isFolder).map(RemoteEntry::asFolder)
-                            .filter(rf -> rf.name().equals(name)).findFirst().orElse(null);
-                    return remoteFolder;
-                } catch (IOException | ApiError e1) {
-                    // Ignore --> just throw the previous exception
-                }
-            }
-            throw new PCloudBlobStoreException(e);
-        } catch (IOException e) {
-            throw new PCloudBlobStoreException(e);
-        }
-    }
-
-    /**
-     * Checks if the given folder still exists, of if null, check if a folder for
-     * the given dir exists.
-     * 
-     * @param dir
-     * @param v
-     * @return
-     */
-    private RemoteFolder checkOrFetchFolder(String dir, RemoteFolder v) {
-        if (v != null) {
-            // Remotefolder in cache, check if still present
-            try {
-                RemoteFolder remoteFolder = this.apiClient.loadFolder(v.folderId()).execute();
-                if (remoteFolder != null) {
-                    LOGGER.debug("Parent folder {} with id {} exists in cache and remote.", dir, v.folderId());
-                    return remoteFolder;
-                }
-            } catch (IOException | ApiError e) {
-                LOGGER.debug("Parent folder {} with id {} exists in cache but not remote!", dir, v.folderId());
-                // Folder does not exist anymore
-                return null;
-            }
-        }
-        // Folder not in cache, check if present remote
-        try {
-            RemoteFolder remoteFolder = this.apiClient.listFolder(this.createPath(dir)).execute();
-            LOGGER.debug("Parent folder {} exists only remote, but not yet in cache.", dir);
-            return remoteFolder;
-        } catch (IOException | ApiError e) {
-            LOGGER.debug("Parent folder {} does not exist.", dir);
-            // Folder does not exist remote
-            return null;
+            return this.metadataStrategy.get(container, key)
+                    .thenCompose(md -> {
+                        if (md != null
+                                && (md.storageType() == StorageType.FOLDER
+                                        || md.storageType() == StorageType.CONTAINER)) {
+                            // Found metadata
+                            return CompletableFuture.completedFuture(md.fileId());
+                        } else {
+                            // This is a subfolder of another folder
+                            return this.assureParentFolder(container, key);
+                        }
+                    })
+                    .thenCompose(parentFolderId -> {
+                        final String name = getFileOfKey(key);
+                        return PCloudUtils.execute(this.getApiClient().createFolder(parentFolderId, name))
+                                .thenCompose(result -> {
+                                    final ExternalBlobMetadata nmd = new ExternalBlobMetadata(container, key,
+                                            result.folderId(),
+                                            StorageType.FOLDER,
+                                            BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
+                                    return this.metadataStrategy.put(container, key, nmd)
+                                            .thenApply(v -> result.folderId());
+                                });
+                    });
+        } else {
+            return this.getContainerMetadata(container)
+                    .thenApply(sm -> Long.valueOf(sm.getProviderId()));
         }
     }
 
@@ -363,7 +303,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blob key
      * @return pure file name
      */
-    private static String getFileOfKey(String key) {
+    public static String getFileOfKey(String key) {
 
         /*
          * First strip directory suffix
@@ -387,14 +327,14 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blobname
      * @return Parent folder name
      */
-    private static String getFolderOfKey(String container, String key) {
+    private static String getFolderOfKey(String key) {
         String folder = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
         folder = folder.replace("\\", SEPARATOR);
         if (folder.contains(SEPARATOR)) {
             folder = key.substring(0, key.lastIndexOf(SEPARATOR));
-            return container + SEPARATOR + folder;
+            return folder;
         }
-        return container;
+        return key;
     }
 
     /**
@@ -413,26 +353,23 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         return new HashingBlobDataSource(blob);
     }
 
-    private StorageMetadata getContainerMetadata(String container) {
+    private CompletableFuture<StorageMetadata> getContainerMetadata(String container) {
         this.pCloudContainerNameValidator.validate(container);
+        return this.metadataStrategy.get(container, null).thenCompose(md -> {
+            return PCloudUtils.execute(this.getApiClient().loadFolder(md.fileId())).thenApply(remoteFolder -> {
+                MutableStorageMetadata metadata = new MutableStorageMetadataImpl();
+                metadata.setName(container);
+                metadata.setType(StorageType.CONTAINER);
+                metadata.setLocation(defaultLocation.get());
+                metadata.setCreationDate(remoteFolder.created());
+                metadata.setLastModified(remoteFolder.lastModified());
+                metadata.setId(Long.toString(remoteFolder.folderId()));
 
-        try {
-            RemoteFolder remoteFolder = this.getApiClient().loadFolder(this.createPath(container)).execute();
-
-            MutableStorageMetadata metadata = new MutableStorageMetadataImpl();
-            metadata.setName(container);
-            metadata.setType(StorageType.CONTAINER);
-            metadata.setLocation(defaultLocation.get());
-            metadata.setCreationDate(remoteFolder.created());
-            metadata.setLastModified(remoteFolder.lastModified());
-            metadata.setId(remoteFolder.id());
-
-            LOGGER.debug("Requested storage metadata for container {}: {}", container, metadata);
-
-            return metadata;
-        } catch (Exception e) {
-            return PCloudUtils.notFileFoundDefault(e, () -> null, PCloudBlobStoreException::new);
-        }
+                LOGGER.debug("Requested storage metadata for container {}: {}", container, metadata);
+                return (StorageMetadata) metadata;
+            });
+        })
+                .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> (StorageMetadata) null));
     }
 
     /**
@@ -448,29 +385,22 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         LOGGER.info("Put directory blob {}/{} with options {}", containerName, blobName, options);
         final String directory = stripDirectorySuffix(blobName);
 
-        final String rootDir = getFolderOfKey(containerName, blobName);
+        return assureParentFolder(containerName, blobName)
+                .thenCompose(targetFolderId -> {
+                    return PCloudUtils.execute(this.getApiClient().createFolder(targetFolderId, directory))
+                            .thenCompose(folder -> {
+                                // Upload metadata
+                                final ExternalBlobMetadata metadata = new ExternalBlobMetadata(containerName, blobName,
+                                        folder.folderId(),
+                                        StorageType.FOLDER,
+                                        options.getBlobAccess(), BlobHashes.empty(),
+                                        blob.getMetadata().getUserMetadata());
 
-        try {
-            final RemoteFolder targetFolder = assureParentFolder(rootDir);
-            return PCloudUtils.execute(this.getApiClient().createFolder(targetFolder, directory))
-                    .thenCompose(folder -> {
-                        // Add to local cache
-                        this.remoteFolderCache.put(containerName + SEPARATOR + directory, folder);
-
-                        // Upload metadata
-                        final ExternalBlobMetadata metadata = new ExternalBlobMetadata(containerName, blobName,
-                                folder.folderId(),
-                                StorageType.FOLDER,
-                                options.getBlobAccess(), BlobHashes.empty(), blob.getMetadata().getUserMetadata());
-
-                        return this.metadataStrategy.put(containerName, blobName, metadata);
-
-                    }) //
-                    .thenApply(v -> base16().lowerCase().encode(DIRECTORY_MD5)) //
-                    .join();
-        } catch (IOException | ApiError e) {
-            throw new PCloudBlobStoreException(e);
-        }
+                                return this.metadataStrategy.put(containerName, blobName, metadata);
+                            }) //
+                            .thenApply(v -> base16().lowerCase().encode(DIRECTORY_MD5)); //
+                })
+                .join();
     }
 
     /**
@@ -556,11 +486,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                     .build();
             blob.getMetadata().setSize(file.size());
         } else {
-            // Add entry to cache
-            if (remoteFile instanceof RemoteFolder) {
-                this.remoteFolderCache.put(key, (RemoteFolder) remoteFile);
-            }
-
             final Payload payload = new EmptyPayload();
             blob = this.blobBuilders.get() //
                     .payload(payload) //
@@ -608,18 +533,19 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 FluentIterable.from(containers).transform(new Function<String, StorageMetadata>() {
                     @Override
                     public StorageMetadata apply(String name) {
-                        return getContainerMetadata(name);
+                        return getContainerMetadata(name).join();
                     }
                 }).filter(Predicates.<StorageMetadata>notNull()), null);
     }
 
     @Override
     public boolean containerExists(String container) {
-
         this.pCloudContainerNameValidator.validate(container);
-        RemoteFolder remoteFolder = this.remoteFolderCache.compute(container, this::checkOrFetchFolder);
-        LOGGER.debug("Does container {} exists -> {}", container, remoteFolder != null);
-        return remoteFolder != null;
+        ExternalBlobMetadata containerMetadata = this.metadataStrategy.get(container, null).join();
+
+        boolean result = containerMetadata != null;
+        LOGGER.debug("Does container {} exists -> {}", container, result);
+        return result;
     }
 
     @Override
@@ -628,8 +554,11 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
         this.pCloudContainerNameValidator.validate(container);
         try {
-            RemoteFolder remoteFolder = this.getApiClient().createFolder(createPath(container)).execute();
-            this.remoteFolderCache.put(container, remoteFolder);
+
+            final RemoteFolder remoteFolder = this.getApiClient().createFolder(createPath(container)).execute();
+            final ExternalBlobMetadata blobMetadata = new ExternalBlobMetadata(container, null, remoteFolder.folderId(),
+                    StorageType.CONTAINER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
+            this.metadataStrategy.put(container, null, blobMetadata);
             return remoteFolder.isFolder();
         } catch (IOException | ApiError e) {
             throw new PCloudBlobStoreException(e);
@@ -644,15 +573,32 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     @Override
     public ContainerAccess getContainerAccess(String container) {
         this.pCloudContainerNameValidator.validate(container);
-        LOGGER.warn("Retrieving access rights for PCloud containers not supported: {}", container);
-        return ContainerAccess.PRIVATE;
+        final ExternalBlobMetadata blobMetadata = this.metadataStrategy.get(container, null).join();
+        return blobMetadata != null
+                ? (blobMetadata.access() == BlobAccess.PRIVATE ? ContainerAccess.PRIVATE : ContainerAccess.PUBLIC_READ)
+                : null;
     }
 
     @Override
     public void setContainerAccess(String container, ContainerAccess access) {
         this.pCloudContainerNameValidator.validate(container);
-        LOGGER.warn("Settings access rights for PCloud containers not supported: {}", container);
 
+        final ExternalBlobMetadata old = this.metadataStrategy.get(container, null).join();
+
+        if (old != null) {
+            BlobAccess nxt = null;
+            if (old.access() == BlobAccess.PRIVATE && access == ContainerAccess.PUBLIC_READ) {
+                nxt = BlobAccess.PUBLIC_READ;
+            } else if (old.access() == BlobAccess.PUBLIC_READ && access == ContainerAccess.PRIVATE) {
+                nxt = BlobAccess.PRIVATE;
+            }
+            if (nxt != null) {
+                ExternalBlobMetadata nw = new ExternalBlobMetadata(old.container(), old.key(), old.fileId(),
+                        old.storageType(), nxt, old.hashes(), old.customMetadata());
+                metadataStrategy.put(container, null, nw).join();
+            }
+            // Nothing to change here
+        }
     }
 
     @Override
@@ -707,18 +653,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
             folder.delete(true);
 
-            // invalidate cache
-            this.remoteFolderCache.remove(container);
-            // Check for and remove child entries
-            final String childEntryPrefix = container + SEPARATOR;
-            final Iterator<Entry<String, RemoteFolder>> it = this.remoteFolderCache.entrySet().iterator();
-            while (it.hasNext()) {
-                final Entry<String, RemoteFolder> entry = it.next();
-                if (entry.getKey().startsWith(childEntryPrefix)) {
-                    it.remove();
-                }
-            }
-
             // Delete metadata
             this.metadataStrategy.list(container, ListContainerOptions.Builder.recursive())
                     .thenCompose(ps -> PCloudUtils
@@ -742,9 +676,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
             folder.delete(false);
             LOGGER.debug("Successfully deleted empty container {}", container);
-            // Since the folder is empty, there is no need to invalidate child cache
-            // entries!
-            this.remoteFolderCache.remove(container);
 
             // SInce the folder is empty, there is no need delete metadata
             return true;
@@ -791,15 +722,13 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
             final String name = getFileOfKey(key);
 
-            final String rootDir = getFolderOfKey(container, key);
-
             // Check if parent folder exists
-            final RemoteFolder targetFolder = assureParentFolder(rootDir);
+            final long targetFolderId = assureParentFolder(container, key).join();
 
             // First write file (and generate hash codes)
             final HashingBlobDataSource ds = dataSourceFromBlob(blob);
             final RemoteFile uploadedFile = PCloudUtils.execute(this.getApiClient().createFile(
-                    targetFolder, name, ds, blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE))
+                    targetFolderId, name, ds, blob.getMetadata().getLastModified(), null, UploadOptions.OVERRIDE_FILE))
                     .join();
 
             // Check if md5 hashes match
@@ -823,7 +752,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             this.metadataStrategy.put(container, key, md).join();
 
             return ds.getHashes().md5();
-        } catch (IOException | ApiError e) {
+        } catch (IOException e) {
             throw new PCloudBlobStoreException(e);
         }
     }
@@ -858,10 +787,10 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             if (source != null && source.getPayload().getRawContent() instanceof RemoteFile) {
 
                 final RemoteFile sourceFile = (RemoteFile) source.getPayload().getRawContent();
-                final RemoteFolder targetFolder = this.assureParentFolder(getFolderOfKey(toContainer, toName));
+                final long folderId = this.assureParentFolder(toContainer, toName).join();
                 RemoteEntry result = null;
                 if (fromName.equals(toName)) {
-                    result = this.getApiClient().copy(sourceFile, targetFolder).execute();
+                    result = this.getApiClient().copy(sourceFile.id(), folderId).execute();
                 } else {
                     /*
                      * Since the pCloud java api does not support rename on copy, copy source file
@@ -869,10 +798,10 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                      */
                     final String temporaryFolderName = ".tmp-" + UUID.randomUUID().toString();
                     final RemoteFolder temp = this.getApiClient()
-                            .createFolder(targetFolder.folderId(), temporaryFolderName).execute();
+                            .createFolder(folderId, temporaryFolderName).execute();
                     final RemoteEntry tempFile = this.getApiClient().copy(sourceFile, temp).execute();
                     final RemoteEntry renamedFile = tempFile.rename(toName);
-                    result = renamedFile.move(targetFolder);
+                    result = this.getApiClient().move(renamedFile.id(), folderId).execute();
                     // Clean up and delete temporary folder
                     temp.delete();
 
@@ -1054,24 +983,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                 .thenCompose(
                                         r -> r ? this.metadataStrategy.delete(container, name).thenApply(v -> r)
                                                 : CompletableFuture.completedFuture(r))
-                                .thenApplyAsync(r -> {
-                                    if (r) {
-                                        // invalidate cache
-                                        this.remoteFolderCache.remove(container + SEPARATOR + name);
-                                        // Check for and clean child entries
-                                        final String childEntryPrefix = container + SEPARATOR + name
-                                                + SEPARATOR;
-                                        final Iterator<Entry<String, RemoteFolder>> it = this.remoteFolderCache
-                                                .entrySet().iterator();
-                                        while (it.hasNext()) {
-                                            final Entry<String, RemoteFolder> entry = it.next();
-                                            if (entry.getKey().startsWith(childEntryPrefix)) {
-                                                it.remove();
-                                            }
-                                        }
-                                    }
-                                    return r;
-                                }).thenCompose(r -> {
+                                .thenCompose(r -> {
                                     if (r) {
                                         // Remote metadata of files inside the folder
                                         return this.metadataStrategy
@@ -1196,19 +1108,14 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 options, uploadId);
 
         final String name = getFileOfKey(blobMetadata.getName());
-        final String rootDir = getFolderOfKey(container, blobMetadata.getName());
 
         // Check if parent folder exists
-        try {
-            final RemoteFolder targetFolder = assureParentFolder(rootDir);
-            PCloudMultipartUpload upload = this.multipartUploadFactory.create(targetFolder.folderId(), container, name,
-                    uploadId, blobMetadata, options);
-            upload.start();
-            this.currentMultipartUploads.put(uploadId, upload);
-            return upload;
-        } catch (IOException | ApiError e) {
-            throw new RuntimeException(e);
-        }
+        final long folderId = assureParentFolder(container, blobMetadata.getName()).join();
+        PCloudMultipartUpload upload = this.multipartUploadFactory.create(folderId, container, name,
+                uploadId, blobMetadata, options);
+        upload.start();
+        this.currentMultipartUploads.put(uploadId, upload);
+        return upload;
     }
 
     @Override

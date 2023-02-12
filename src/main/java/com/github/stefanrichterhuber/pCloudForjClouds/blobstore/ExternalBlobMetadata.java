@@ -200,6 +200,10 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     @Override
     public int compareTo(ExternalBlobMetadata o) {
         if (this.container().equals(o.container())) {
+            
+            if(this.key() == null) {
+                return -1;
+            }
             return this.key().compareTo(o.key());
         }
         return this.container().compareTo(o.container());
