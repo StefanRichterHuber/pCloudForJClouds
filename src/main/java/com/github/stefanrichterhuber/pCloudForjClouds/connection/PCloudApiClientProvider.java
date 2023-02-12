@@ -5,7 +5,6 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ForkJoinPool;
 
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -69,7 +68,7 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
             pCloudHost = apiResponse.getApi().get(0);
         }
 
-        return PCloudSdk.newClientBuilder().apiHost(pCloudHost).callbackExecutor(ForkJoinPool.commonPool())
+        return PCloudSdk.newClientBuilder().apiHost(pCloudHost)
                 .authenticator(Authenticators.newOAuthAuthenticator(clientSecret)).create();
     }
 
