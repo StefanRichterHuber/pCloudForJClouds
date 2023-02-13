@@ -10,7 +10,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -19,6 +18,7 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
 import javax.inject.Inject;
@@ -128,14 +128,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      */
     private final Map<String, PCloudMultipartUpload> currentMultipartUploads = new ConcurrentHashMap<>();
 
-    /**
-     * Caches the folder ids for a container path. Also provides a locking mechanism
-     * when multiple threads want the metadata for the same folder, but it does not
-     * exists yet. Would lead to multiple attempts to create the folder, flooding
-     * the backend.
-     */
-    private final Map<String, CompletableFuture<Long>> FOLDER_ID_CACHE = new ConcurrentHashMap<>();
-
     @Inject
     protected PCloudBlobStore( //
             BlobStoreContext context, Provider<BlobBuilder> blobBuilders, //
@@ -244,48 +236,33 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     private CompletableFuture<Long> assureParentFolder(String container, String targetKey) {
         if (targetKey.contains(SEPARATOR)) {
             final String key = getFolderOfKey(targetKey);
-            return FOLDER_ID_CACHE.computeIfAbsent(container + SEPARATOR + key, fullKey -> {
-                return this.metadataStrategy.get(container, key)
-                        .thenCompose(md -> {
-                            if (md != null
-                                    && (md.storageType() == StorageType.FOLDER
-                                            || md.storageType() == StorageType.CONTAINER)) {
-                                // Found metadata
-                                return CompletableFuture.completedFuture(md.fileId());
-                            } else {
-                                // This is a subfolder of another folder
-                                return this.assureParentFolder(container, key);
-                            }
+
+            final BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> create = (c, k) -> {
+                final String name = getFileOfKey(key);
+                return this.assureParentFolder(container, key)
+                        .thenCompose(parentFolderId -> PCloudUtils
+                                .execute(this.getApiClient().createFolder(parentFolderId, name)))
+                        .thenApply(rf -> {
+                            ExternalBlobMetadata md = new ExternalBlobMetadata(container, key, rf.folderId(),
+                                    StorageType.FOLDER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
+                            return md;
                         })
-                        .thenCompose(parentFolderId -> {
-                            final String name = getFileOfKey(key);
-                            return PCloudUtils.execute(this.getApiClient().createFolder(parentFolderId, name))
-                                    .thenApply(rf -> rf.folderId())
-                                    .exceptionally(e -> {
-                                        if (e instanceof ApiError) {
-                                            if (((ApiError) e).errorCode() == PCloudError.ALREADY_EXISTS.getCode()) {
-                                                return this.metadataStrategy.get(container, key).join().fileId();
-                                            }
-                                        }
-                                        if (e instanceof RuntimeException) {
-                                            throw (RuntimeException) e;
-                                        } else {
-                                            throw new RuntimeException(e);
-                                        }
-                                    })
-                                    .thenCompose(result -> {
-                                        final ExternalBlobMetadata nmd = new ExternalBlobMetadata(container, key,
-                                                result,
-                                                StorageType.FOLDER,
-                                                BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
-                                        return this.metadataStrategy.put(container, key, nmd)
-                                                .thenApply(v -> result);
-                                    });
+                        .exceptionallyCompose(e -> {
+                            if (e instanceof ApiError) {
+                                if (((ApiError) e).errorCode() == PCloudError.ALREADY_EXISTS.getCode()) {
+                                    return this.metadataStrategy.get(container, key);
+                                }
+                            }
+                            if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                            } else {
+                                throw new RuntimeException(e);
+                            }
                         });
-            });
+            };
+            return this.metadataStrategy.getOrCreate(container, key, create).thenApply(em -> em.fileId());
         } else {
-            return FOLDER_ID_CACHE.computeIfAbsent(container, c -> this.getContainerMetadata(c)
-                    .thenApply(sm -> Long.valueOf(sm.getProviderId())));
+            return this.metadataStrategy.get(container, null).thenApply(em -> em.fileId());
         }
     }
 
@@ -689,19 +666,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                     .collect(Collectors.toList())))
                     .join();
 
-            // Invalidate cache
-            this.FOLDER_ID_CACHE.remove(container);
-            // Check for and clean child entries
-            final String childEntryPrefix = container + SEPARATOR;
-            final Iterator<Entry<String, CompletableFuture<Long>>> it = this.FOLDER_ID_CACHE
-                    .entrySet().iterator();
-            while (it.hasNext()) {
-                final Entry<String, CompletableFuture<Long>> entry = it.next();
-                if (entry.getKey().startsWith(childEntryPrefix)) {
-                    it.remove();
-                }
-            }
-
             LOGGER.debug("Successfully deleted container {}", container);
         } catch (IOException | ApiError e) {
             throw new PCloudBlobStoreException(e);
@@ -720,8 +684,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             LOGGER.debug("Successfully deleted empty container {}", container);
 
             // Invalidate cache
-            this.FOLDER_ID_CACHE.remove(container);
-            // Since the folder is empty, there is no need delete metadata of files
+            this.metadataStrategy.delete(container, null).join();
 
             return true;
         } catch (IOException | ApiError e) {
@@ -1028,22 +991,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                 .thenCompose(
                                         r -> r ? this.metadataStrategy.delete(container, name).thenApply(v -> r)
                                                 : CompletableFuture.completedFuture(r))
-                                .thenApplyAsync(r -> {
-                                    if (r) {
-                                        // Check for and clean child entries
-                                        final String childEntryPrefix = container + SEPARATOR + name;
-                                        this.FOLDER_ID_CACHE.remove(childEntryPrefix);
-                                        final Iterator<Entry<String, CompletableFuture<Long>>> it = this.FOLDER_ID_CACHE
-                                                .entrySet().iterator();
-                                        while (it.hasNext()) {
-                                            final Entry<String, CompletableFuture<Long>> entry = it.next();
-                                            if (entry.getKey().startsWith(childEntryPrefix)) {
-                                                it.remove();
-                                            }
-                                        }
-                                    }
-                                    return r;
-                                })
                                 .thenCompose(r -> {
                                     if (r) {
                                         // Remote metadata of files inside the folder
