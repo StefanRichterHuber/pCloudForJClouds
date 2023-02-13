@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -17,8 +18,18 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
+import javax.cache.Cache;
+import javax.cache.CacheManager;
+import javax.cache.Caching;
+import javax.cache.configuration.MutableConfiguration;
+import javax.cache.expiry.CreatedExpiryPolicy;
+import javax.cache.expiry.Duration;
+import javax.cache.integration.CacheLoader;
+import javax.cache.integration.CacheLoaderException;
+import javax.cache.spi.CachingProvider;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -69,9 +80,10 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
 
     private final RedisConnection<String, String> redisConnection;
     private static final String REDIS_PREFIX = "PCloudBlobStore:";
-    private static final String REDIS_KEY_LAST_DIFF = "PCloudBlobStore-last-diff";
+    private static final String REDIS_KEY_LAST_DIFF_PREFIX = "PCloudBlobStore-last-diff";
 
     private final String redisKeyPrefix;
+    private final String redisLastDiffKey;
 
     private final String metadataFolder;
     private final long metadataFolderId;
@@ -83,6 +95,39 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private final ApiClient apiClient;
 
     private final Executor backgroundExecutor;
+
+    private static record MetadataCacheKey(String container, String key) {
+    };
+
+    /**
+     * This cache allows for short time(!) caching of metadata, especially the
+     * folder metadata.
+     * <li>Heavily optimizes typical put-get sequences by providing instant access
+     * to metadata
+     * <li>Heavily optimizes concurrent writes because it locally caches the
+     * necessary parent folder id
+     */
+    private final Cache<MetadataCacheKey, CompletableFuture<ExternalBlobMetadata>> cache;
+
+    private class CacheLoaderImpl implements CacheLoader<MetadataCacheKey, CompletableFuture<ExternalBlobMetadata>> {
+
+        @Override
+        public CompletableFuture<ExternalBlobMetadata> load(MetadataCacheKey key)
+                throws CacheLoaderException {
+            return RedisMetadataStrategyImpl.this.getFromRemote(key.key(), key.container());
+        }
+
+        @Override
+        public Map<MetadataCacheKey, CompletableFuture<ExternalBlobMetadata>> loadAll(
+                Iterable<? extends MetadataCacheKey> keys) throws CacheLoaderException {
+            final Map<MetadataCacheKey, CompletableFuture<ExternalBlobMetadata>> result = new HashMap<>();
+            for (var key : keys) {
+                result.put(key, this.load(key));
+            }
+            return result;
+        }
+
+    }
 
     @Inject
     protected RedisMetadataStrategyImpl( //
@@ -103,12 +148,27 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         this.sanitizeInterval = sanitizeInterval;
         this.synchronizeInterval = synchronizeInterval;
 
+        CachingProvider cachingProvider = Caching.getCachingProvider();
+        CacheManager cacheManager = cachingProvider.getCacheManager();
+
         this.backgroundExecutor = Executors.newCachedThreadPool();
 
         // We need to distinguish between different users in the cache
         try {
-            long userId = apiClient.getUserInfo().execute().userId();
+            final long userId = apiClient.getUserInfo().execute().userId();
+
+            System.setProperty("hazelcast.jcache.provider.type", "member");
+            final CacheLoader<MetadataCacheKey, CompletableFuture<ExternalBlobMetadata>> cacheLoader = new CacheLoaderImpl();
+            final var config = new MutableConfiguration<MetadataCacheKey, CompletableFuture<ExternalBlobMetadata>>()
+                    .setCacheLoaderFactory(() -> cacheLoader) //
+                    .setReadThrough(true) //
+                    .setStoreByValue(false) //
+                    .setExpiryPolicyFactory(CreatedExpiryPolicy.factoryOf(Duration.TEN_MINUTES)); //
+            this.cache = cacheManager
+                    .createCache(Long.toString(userId), config);
+
             this.redisKeyPrefix = String.format("%s%d:", REDIS_PREFIX, userId);
+            this.redisLastDiffKey = String.format("%s%d:", REDIS_KEY_LAST_DIFF_PREFIX, userId);
         } catch (IOException | ApiError e) {
             throw new RuntimeException(e);
         }
@@ -158,7 +218,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param gson
      */
     private CompletableFuture<Void> loadMetadataDiffs(OkHttpClient httpClient, HttpUrl apiHost, Gson gson) {
-        final String diffId = this.redisConnection.get(REDIS_KEY_LAST_DIFF);
+        final String diffId = this.redisConnection.get(redisLastDiffKey);
         LOGGER.info("Start syncing metadata files since {}", diffId);
         return loadMetadataDiffs(diffId, httpClient, apiHost, gson)
                 // Ignore errors in the run and hope for the next
@@ -203,7 +263,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                 return PCloudUtils
                         .allOf(applicableEntries.stream().map(this::applyDiff).collect(Collectors.toList()))
                         .thenComposeAsync(v -> {
-                            this.redisConnection.set(REDIS_KEY_LAST_DIFF, currentDiffId);
+                            this.redisConnection.set(redisLastDiffKey, currentDiffId);
                             if (currentDiffId.equals(diffId)) {
                                 return CompletableFuture.completedFuture(null);
                             } else {
@@ -371,7 +431,35 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     }
 
     @Override
+    public CompletableFuture<ExternalBlobMetadata> getOrCreate(String container, String key,
+            BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
+        return this.cache.invoke(new MetadataCacheKey(container, key), (e, args) -> {
+            return this.get(container, key).thenCompose(em -> {
+                if (em != null) {
+                    return CompletableFuture.completedFuture(em);
+                } else {
+                    return factory.apply(container, key)
+                            .thenCompose(emn -> emn != null ? this.put(container, key, emn).thenApply(v -> emn)
+                                    : CompletableFuture.completedFuture(emn));
+                }
+            });
+        }, (Object[]) null);
+    }
+
+    @Override
     public CompletableFuture<ExternalBlobMetadata> get(String container, String key) {
+        return getOrCreate(container, key, (c, k) -> CompletableFuture.completedFuture(null));
+    }
+
+    /**
+     * Tries to find the requested {@link ExternalBlobMetadata} in either the remote
+     * redis cache, the remote metadata folder, or create it from the existing blob
+     * 
+     * @param container Container of the blob
+     * @param key       Key of the blob
+     * @return {@link ExternalBlobMetadata} found
+     */
+    private CompletableFuture<ExternalBlobMetadata> getFromRemote(String container, String key) {
         if (active) {
             return this.getFromCache(container, key)
                     .thenCompose(ebm -> {
@@ -525,6 +613,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                                 DataSource.create(json.getBytes(StandardCharsets.UTF_8)), UploadOptions.OVERRIDE_FILE));
                 final CompletableFuture<Void> cacheOp = CompletableFuture.supplyAsync(() -> {
                     // File uploaded, now set cache
+                    this.cache.put(new MetadataCacheKey(container, key), CompletableFuture.completedFuture(metadata));
                     final String k = getRedisKey(container, key);
                     this.redisConnection.set(k, json);
                     return null;
@@ -557,6 +646,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             final CompletableFuture<Boolean> fileOp = PCloudUtils.execute(this.apiClient.deleteFile(filename))
                     .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> true));
             final CompletableFuture<Boolean> cacheOp = CompletableFuture.supplyAsync(() -> {
+                this.cache.remove(new MetadataCacheKey(container, key));
                 final String k = getRedisKey(container, key);
                 this.redisConnection.del(k);
                 return true;

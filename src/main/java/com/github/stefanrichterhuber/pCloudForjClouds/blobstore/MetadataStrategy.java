@@ -2,6 +2,8 @@ package com.github.stefanrichterhuber.pCloudForjClouds.blobstore;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.PageSet;
@@ -25,6 +27,28 @@ public interface MetadataStrategy {
      * @return {@link CompletableFuture} containing the result of the operation.
      */
     CompletableFuture<ExternalBlobMetadata> get(String container, String key);
+
+    /**
+     * Retrieves the metadata for the given blob. If not found, create a new one
+     * using the given factory and insert it.
+     * 
+     * @param container Container containing the blob
+     * @param key       Key of the blob
+     * @param factory   If no value found, use this {@link Supplier} to create a new
+     *                  {@link ExternalBlobMetadata}.
+     * @return {@link CompletableFuture} containing the result of the operation.
+     */
+    default CompletableFuture<ExternalBlobMetadata> getOrCreate(String container, String key,
+            BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
+        return this.get(container, key).thenCompose(em -> {
+            if (em != null) {
+                return CompletableFuture.completedFuture(em);
+            } else {
+                return factory.apply(container, key)
+                        .thenCompose(emn -> this.put(container, key, emn).thenApply(v -> emn));
+            }
+        });
+    }
 
     /**
      * Persist some metadata for the given blob

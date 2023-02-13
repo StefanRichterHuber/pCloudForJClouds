@@ -18,7 +18,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.apache.commons.io.IOUtils;
 import org.jclouds.Constants;
@@ -44,6 +46,7 @@ import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.PCloudBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudUtils;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.common.base.Charsets;
@@ -70,6 +73,7 @@ public class PCloudForJCloudTest {
         properties.setProperty(PCloudConstants.PROPERTY_BASEDIR, "/S3");
         properties.setProperty(PCloudConstants.PROPERTY_CLIENT_SECRET, token);
         properties.setProperty(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/test-metadata");
+        properties.setProperty(PCloudConstants.PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN, "-1");
         // Either api.pcloud.com or eapi.pcloud.com for European accounts
         properties.setProperty(Constants.PROPERTY_ENDPOINT, PCloudUtils.testForAPIEndpoint(token).orNull());
 
@@ -213,7 +217,7 @@ public class PCloudForJCloudTest {
 
     @Test
     public void shouldUploadAndDownloadContent() throws IOException, InterruptedException {
-        String blobName = UUID.randomUUID().toString() + ".txt";
+        String blobName = "f1/f2/" + UUID.randomUUID().toString() + ".txt";
         String blobContent = UUID.randomUUID().toString();
         Map<String, String> md = new HashMap<>();
         md.put("Usermetadata1", "user meta data value1");
@@ -443,6 +447,16 @@ public class PCloudForJCloudTest {
             assertTrue(names.containsAll(Arrays.asList(blobName3, blobName4)));
         }
 
+    }
+
+    @Test
+    public void shouldGetFileOfKey() {
+        assertEquals("k1", PCloudBlobStore.getFileOfKey("v1/k1"));
+        assertEquals("k1", PCloudBlobStore.getFileOfKey("/v1/k1"));
+        assertEquals("k1", PCloudBlobStore.getFileOfKey("v1/v2/v3/k1"));
+        assertEquals("k1", PCloudBlobStore.getFileOfKey("v1\\k1"));
+        assertEquals("k1", PCloudBlobStore.getFileOfKey("\\v1\\k1"));
+        assertEquals("k1", PCloudBlobStore.getFileOfKey("/v1\\k1"));
     }
 
     @Test
