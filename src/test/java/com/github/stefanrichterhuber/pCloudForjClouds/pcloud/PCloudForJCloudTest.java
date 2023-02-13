@@ -18,9 +18,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import org.apache.commons.io.IOUtils;
 import org.jclouds.Constants;
@@ -470,7 +468,7 @@ public class PCloudForJCloudTest {
         List<String> etags = new ArrayList<>();
         for (int i = 0; i < TEST_FILES; i++) {
             contents.add(UUID.randomUUID().toString());
-            blobNames.add((i % 2 == 0 ? "pre-" : "") + UUID.randomUUID().toString() + ".txt");
+            blobNames.add((i % 2 == 0 ? "pre-" : "") + (i) + ".txt");
 
             Blob blob = blobStore.blobBuilder(blobNames.get(i))//
                     .payload(contents.get(i)) //
@@ -512,10 +510,19 @@ public class PCloudForJCloudTest {
                     ListContainerOptions.Builder.maxResults(TEST_FILES / 2));
             assertNotNull(firstPageSet.getNextMarker());
 
+            firstPageSet.forEach(sm -> {
+                LOGGER.info("  - {}", sm.getName());
+            });
+            LOGGER.info("------------------ next page after marker {} --------------------------",
+                    firstPageSet.getNextMarker());
+
             PageSet<? extends StorageMetadata> secondPageSet = blobStore.list(container,
                     ListContainerOptions.Builder.maxResults(TEST_FILES / 2)
                             .afterMarker(firstPageSet.getNextMarker()));
             assertEquals(TEST_FILES / 2, secondPageSet.size());
+            secondPageSet.forEach(sm -> {
+                LOGGER.info("  - {}", sm.getName());
+            });
 
             Set<String> names = new HashSet<>();
             names.addAll(firstPageSet.stream().map(sm -> sm.getName()).collect(Collectors.toList()));

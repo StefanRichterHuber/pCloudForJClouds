@@ -5,7 +5,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
@@ -111,14 +113,23 @@ public abstract class AbstractBlobStore implements BlobStore {
     public void clearContainer(String container, ListContainerOptions options) {
         LOGGER.info("Clear container {} with options {}", container, options);
 
-        ListContainerOptions opts = options.clone();
-        do {
-            final PageSet<? extends StorageMetadata> pageSet = this.list(container, opts);
-            opts = pageSet.getNextMarker() != null ? opts.afterMarker(pageSet.getNextMarker()) : opts;
+        final List<CompletableFuture<Boolean>> jobs = new ArrayList<>();
 
+        ListContainerOptions opts = options.clone();
+        while (true) {
+            final PageSet<? extends StorageMetadata> pageSet = this.list(container, opts);
             final List<String> keys = pageSet.stream().map(smd -> smd.getName()).collect(Collectors.toList());
-            this.removeBlobs(container, keys);
-        } while (opts.getMarker() != null);
+            jobs.add(CompletableFuture.supplyAsync(() -> {
+                this.removeBlobs(container, keys);
+                return true;
+            }));
+
+            if (keys.isEmpty() || pageSet.getNextMarker() == null) {
+                break;
+            }
+            opts = opts.afterMarker(pageSet.getNextMarker());
+        }
+        PCloudUtils.allOf(jobs).join();
     }
 
     @Override

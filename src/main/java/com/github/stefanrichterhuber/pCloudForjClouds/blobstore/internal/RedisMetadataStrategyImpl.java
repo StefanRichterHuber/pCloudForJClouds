@@ -4,7 +4,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -13,6 +12,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -86,7 +86,6 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private final Executor backgroundExecutor;
     private final RedissonClient redisson;
     private final RMap<String, String> redisCache;
-    private final AtomicLong threadCnts = new AtomicLong();
 
     @Inject
     protected RedisMetadataStrategyImpl( //
@@ -379,51 +378,35 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         return container + SEPARATOR + key;
     }
 
+    /**
+     * Checks if the target value sits in the cache, if not, lock the cache for the
+     * key and look up either the remote metadata folder or create the metadata for
+     * an existing file or use the factory to create the metadata.
+     */
     @Override
     public CompletableFuture<ExternalBlobMetadata> getOrCreate(String container, String key,
             BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
 
-        final String k = getRedisKey(container, key);
-        final RLock lock = this.redisCache.getLock(k);
-        final long threadId = Thread.currentThread().getId();
-
-        return lock.lockAsync(threadId)
-                .thenCompose(v -> this.getOrCreateWithoutLock(container, key, factory))
-                .thenCompose(v -> lock.unlockAsync(threadId).thenApply(x -> v))
-                .exceptionallyCompose(
-                        e -> lock.unlockAsync(threadId).thenCompose(v -> CompletableFuture.failedStage(e)))
-                .toCompletableFuture();
-    }
-
-    private CompletableFuture<ExternalBlobMetadata> getOrCreateWithoutLock(String container, String key,
-            BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
-
-        final long threadId = Thread.currentThread().getId();
         return this.getFromCache(container, key)
-                .thenCompose(ebm -> {
-                    if (ebm != null) {
-                        // Data found in local cache
-                        return CompletableFuture.completedFuture(ebm);
+                .thenCompose(olm -> {
+                    if (olm != null) {
+                        return CompletableFuture.completedFuture(olm);
                     } else {
-                        // Data not found in local cache, try remote metadata folder
-                        // try lock and then find files remote
                         final String k = getRedisKey(container, key);
                         final RLock lock = this.redisCache.getLock(k);
-                        return this.getFromRemote(container, key)
-                                .thenCompose(em -> {
-                                    if (em != null) {
-                                        return CompletableFuture.completedFuture(em);
-                                    } else {
-                                        if (factory != null) {
-                                            return factory.apply(container, key)
-                                                    .thenCompose(emn -> emn != null
-                                                            ? this.put(container, key, emn).thenApply(v -> emn)
-                                                            : CompletableFuture.completedFuture(emn));
-                                        }
-                                        return CompletableFuture.completedFuture(em);
-                                    }
+                        final long threadId = Thread.currentThread().getId();
+
+                        return lock.lockAsync(threadId)
+                                .thenApply(v -> {
+                                    LOGGER.trace("Locked metadata entry {}/{} for thread {}", container, key, threadId);
+                                    return v;
                                 })
-                                .thenCompose(em -> lock.unlockAsync(threadId).thenApply(v -> em))
+                                .thenCompose(v -> this.getOrCreateWithoutLock(container, key, factory))
+                                .thenCompose(v -> lock.unlockAsync(threadId).thenApply(x -> {
+                                    LOGGER.trace("Unlocked metadata entry {}/{} for thread {}", container, key,
+                                            threadId);
+                                    return v;
+                                }))
                                 .exceptionallyCompose(
                                         e -> lock.unlockAsync(threadId)
                                                 .thenCompose(v -> CompletableFuture.failedStage(e)))
@@ -433,9 +416,75 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
 
     }
 
+    /**
+     * Checks if the value exists, or creates if if not using the given factory.
+     * This variant of the method does not perform a lock, so it could be used by
+     * method with prior lock.
+     * 
+     * @param container Container of the blob
+     * @param key       Key of the blob
+     * @param factory   Factory to create the metadata for the lob
+     * @return {@link ExternalBlobMetadata} found / created
+     */
+    private CompletableFuture<ExternalBlobMetadata> getOrCreateWithoutLock(String container, String key,
+            BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
+        return this.getFromCache(container, key)
+                .thenCompose(ebm -> {
+                    if (ebm != null) {
+                        // Data found in local cache
+                        LOGGER.debug("Determined value {} for key {}/{} from cache", ebm, container, key);
+                        return CompletableFuture.completedFuture(ebm);
+                    } else {
+                        LOGGER.debug("Metadata for {}/{} not found locally ", container, key);
+                        // Data not found in local cache, try remote metadata folder
+                        return this.getFromRemote(container, key)
+                                .thenCompose(em -> {
+                                    if (em != null) {
+                                        return CompletableFuture.completedFuture(em);
+                                    } else {
+                                        if (factory != null) {
+                                            return factory.apply(container, key)
+                                                    .thenApply(emn -> {
+                                                        LOGGER.info("Determined value {} for {}/{} from factory", emn,
+                                                                container, key);
+                                                        return emn;
+                                                    })
+                                                    .thenCompose(emn -> emn != null
+                                                            ? this.putWithoutLock(container, key, emn)
+                                                                    .thenApply(v -> emn)
+                                                            : CompletableFuture.completedFuture(emn))
+                                                    .exceptionallyCompose(e -> {
+                                                        ApiError err = null;
+                                                        if (e instanceof ApiError) {
+                                                            err = (ApiError) e;
+                                                        } else if (e.getCause() instanceof ApiError) {
+                                                            err = (ApiError) e.getCause();
+                                                        } else if (e.getCause() != null
+                                                                && e.getCause().getCause() instanceof ApiError) {
+                                                            err = (ApiError) e.getCause().getCause();
+                                                        }
+                                                        if (err != null && err.errorCode() == PCloudError.ALREADY_EXISTS
+                                                                .getCode()) {
+                                                            LOGGER.info(
+                                                                    "Requested to generate object {}/{} but it already exists",
+                                                                    container, key);
+                                                            return getOrCreateWithoutLock(container, key, null);
+                                                        }
+                                                        return CompletableFuture.failedStage(e);
+                                                    });
+                                        }
+                                        return CompletableFuture.completedFuture(em);
+                                    }
+                                })
+                                .toCompletableFuture();
+                    }
+                });
+
+    }
+
     @Override
     public CompletableFuture<ExternalBlobMetadata> get(String container, String key) {
-        return getOrCreate(container, key, (c, k) -> CompletableFuture.completedFuture(null));
+        return getOrCreate(container, key, null);
     }
 
     /**
@@ -563,7 +612,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                     .exceptionally(e -> PCloudUtils.notFileFoundDefault(e, () -> null));
         }
         if (filename.endsWith(SEPARATOR)) {
-            // This is a folder blob
+            // This is definitly a folder blob
             return PCloudUtils.execute(this.apiClient.loadFolder(PCloudBlobStore.stripDirectorySuffix(filename)))
                     .thenComposeAsync(
                             rf -> this.restoreMetadataWithoutLock(container, key, BlobAccess.PRIVATE,
@@ -572,6 +621,15 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         } else {
             // This is a file blob
             return PCloudUtils.execute(this.apiClient.loadFile(filename))
+                    .thenCompose(rf -> {
+                        if (rf.isFolder()) {
+                            // It was not a file, but is a folder :/
+                            return PCloudUtils
+                                    .execute(this.apiClient.loadFolder(PCloudBlobStore.stripDirectorySuffix(filename)))
+                                    .thenApply(f -> (RemoteEntry) f);
+                        }
+                        return CompletableFuture.completedFuture(rf);
+                    })
                     .thenComposeAsync(
                             rf -> this.restoreMetadataWithoutLock(container, key, BlobAccess.PRIVATE,
                                     Collections.emptyMap(), rf))
@@ -593,14 +651,21 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                 .toCompletableFuture();
     }
 
+    /**
+     * This variant of the method does not perform a lock, so it could be used by
+     * method with prior lock.
+     * 
+     * @param container
+     * @param key
+     * @param metadata
+     * @return
+     */
     private CompletableFuture<Void> putWithoutLock(String container, String key, ExternalBlobMetadata metadata) {
         if (active) {
             if (metadata != null) {
                 final String filename = getMetadataFileName(container, key);
                 final String json = metadata.toJson();
                 final String k = getRedisKey(container, key);
-
-                final RLock lock = this.redisCache.getLock(k);
 
                 // Both operations can be done in parallel
                 final CompletableFuture<RemoteFile> fileOp = PCloudUtils
@@ -611,17 +676,15 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                         .toCompletableFuture();
 
                 // Execute both operations ins parallel
-                return CompletableFuture.allOf(fileOp, cacheOp).exceptionally(e -> {
+                return CompletableFuture.allOf(fileOp, cacheOp).exceptionallyCompose(e -> {
                     // Clean up on errors
-                    this.delete(container, key).join();
-                    if (e instanceof RuntimeException) {
-                        throw (RuntimeException) e;
-                    } else {
-                        throw new RuntimeException(e);
-                    }
+                    return this.deleteWithoutLock(container, key).thenCompose(v -> CompletableFuture.failedStage(e));
+                }).exceptionallyCompose(e -> {
+                    LOGGER.error("Failed to upload metadata for {}/{}: {}", container, key, e);
+                    return CompletableFuture.failedFuture(e);
                 });
             } else {
-                return delete(container, key);
+                return deleteWithoutLock(container, key);
             }
         } else {
             return CompletableFuture.completedFuture(null);
@@ -642,11 +705,18 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                 .toCompletableFuture();
     }
 
+    /**
+     * This variant of the method does not perform a lock, so it could be used by
+     * method with prior lock.
+     * 
+     * @param container
+     * @param key
+     * @return
+     */
     private CompletableFuture<Void> deleteWithoutLock(String container, String key) {
         if (active) {
-            final String filename = getMetadataFileName(container, key);
+            final String filename = this.metadataFolder + SEPARATOR + getMetadataFileName(container, key);
             final String k = getRedisKey(container, key);
-            final RLock lock = this.redisCache.getLock(k);
 
             // Both operations can be done in parallel
             final CompletableFuture<Boolean> fileOp = PCloudUtils.execute(this.apiClient.deleteFile(filename))
@@ -656,7 +726,11 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                     .toCompletableFuture();
 
             return CompletableFuture.allOf(fileOp, cacheOp).thenAccept(v -> {
-                LOGGER.debug("Delete metadata for {}/{}", container, key);
+                if (fileOp.join() && cacheOp.join()) {
+                    LOGGER.debug("Deleted metadata for {}/{}", container, key);
+                } else {
+                    LOGGER.warn("Failed to delete metadata for {}/{}", container, key);
+                }
             });
         } else {
             return CompletableFuture.completedFuture(null);
@@ -674,89 +748,43 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             }
 
             // number of results to fetch
-            int resultsToFetch = options.getMaxResults() != null ? options.getMaxResults() : 1000;
-
-            String match = redisKeyPrefix + containerName + SEPARATOR;
-            if (options.getPrefix() != null) {
-                match += options.getPrefix();
-            }
-            match += "*";
-
+            final int resultsToFetch = options.getMaxResults() != null ? options.getMaxResults() : 1000;
+            final String match = containerName + SEPARATOR + (options.getPrefix() != null ? options.getPrefix() : "");
             final String marker = options.getMarker();
 
-            TreeSet<ExternalBlobMetadata> contents = this.redisCache.entrySet(match).stream()
-                    .dropWhile(e -> {
-                        if (marker == null) {
-                            return false;
-                        } else {
-                            return e.getKey().compareTo(marker) < 1;
-                        }
-                    })
-                    .filter(e -> matchesListOptions(e.getKey(), options, containerName)) //
-                    .filter(e -> e != null) //
-                    .limit(resultsToFetch) //
-                    .map(e -> e.getValue()) //
-                    .map(e -> ExternalBlobMetadata.fromJSON(e)) //
-                    .peek(e -> {
-                        if (!options.isDetailed()) {
-                            e.customMetadata().clear();
-                        }
-                    })
-                    .collect(Collectors.toCollection(TreeSet::new));
+            return this.redisCache.readAllKeySetAsync()
+                    .thenApply(keys -> keys.stream()
+                            .filter(k -> k.startsWith(match))
+                            .sorted()
+                            .dropWhile(e -> marker == null ? false : e.compareTo(marker) <= 0)
+                            .filter(e -> matchesListOptions(e, options, containerName)) //
+                            .filter(e -> e != null) //
+                            .limit(resultsToFetch) //
+                            .collect(Collectors.toCollection(TreeSet::new)))
+                    .thenCompose(keys -> {
+                        final String nextMarker = keys.isEmpty() || keys.size() < resultsToFetch ? null
+                                : keys.last();
 
-            final String nextMarker = contents.isEmpty() ? null
-                    : this.getRedisKey(contents.last().container(), contents.last().key());
-            return CompletableFuture.completedFuture(new PageSetImpl<ExternalBlobMetadata>(contents, nextMarker));
+                        return PCloudUtils.allOf(keys.stream()
+                                .map(k -> this.redisCache.getAsync(k).thenApply(v -> ExternalBlobMetadata.fromJSON(v))
+                                        .toCompletableFuture())
+                                .collect(Collectors.toList()))
+                                .thenApply(l -> {
+                                    var r = l.stream().filter(e -> e != null).peek(e -> {
+                                        if (!options.isDetailed()) {
+                                            e.customMetadata().clear();
+                                        }
+                                    }).collect(Collectors.toCollection(TreeSet::new));
+                                    return r;
+                                })
+                                .thenApply(
+                                        contents -> (PageSet<ExternalBlobMetadata>) new PageSetImpl<ExternalBlobMetadata>(
+                                                contents, nextMarker));
+                    })
+                    .toCompletableFuture();
         } else {
             return CompletableFuture.completedFuture(new PageSetImpl<>(Collections.emptyList(), null));
         }
-    }
-
-    /**
-     * Loads all the {@link ExternalBlobMetadata} for the {@link List} of metadata
-     * keys
-     * 
-     * @param keys Cache keys
-     */
-    private List<CompletableFuture<ExternalBlobMetadata>> loadMetadata(List<String> keys) {
-        final List<CompletableFuture<ExternalBlobMetadata>> jobs = new ArrayList<>(keys.size());
-        // process data and fetch the file metadata for each job sync
-        for (String key : keys) {
-            final CompletableFuture<ExternalBlobMetadata> storageMetadata = CompletableFuture.supplyAsync(() -> {
-                final String v = this.redisCache.get(key);
-                final ExternalBlobMetadata md = ExternalBlobMetadata.fromJSON(v);
-                return md;
-            });
-            jobs.add(storageMetadata);
-        }
-        return jobs;
-    }
-
-    /**
-     * Filter out cache keys not matching the given {@link ListContainerOptions}
-     * 
-     * @param keys    {@link List} of keys to filter
-     * @param options {@link ListContainerOptions} to apply. Might be null or
-     *                {@link ListContainerOptions#NONE}
-     * @return filtered {@link List}
-     */
-    private List<String> filterCacheKeysForListOptions(List<String> keys, ListContainerOptions options,
-            String container) {
-        if (keys == null || options == null) {
-            return keys;
-        }
-
-        if (!options.isRecursive()) {
-            final int prefixLength = ((redisKeyPrefix + container + SEPARATOR)
-                    + (options.getPrefix() != null ? options.getPrefix() : "")).length();
-
-            keys = keys.stream().filter(key -> {
-                final String subKey = key.substring(prefixLength);
-                return !subKey.contains(SEPARATOR);
-            }).collect(Collectors.toList());
-        }
-
-        return keys;
     }
 
     /**
@@ -774,7 +802,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         }
 
         if (!options.isRecursive()) {
-            final int prefixLength = ((redisKeyPrefix + container + SEPARATOR)
+            final int prefixLength = (container + SEPARATOR
                     + (options.getPrefix() != null ? options.getPrefix() : "")).length();
 
             final String subKey = key.substring(prefixLength);
@@ -787,7 +815,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * Restores the metadata entries (without custom metadata!) for the given
      * {@link RemoteFile}. Data is stored in cache.
      * 
-     * @param container    COntainer of the blob
+     * @param container    Container of the blob
      * @param key          Key of the blob
      * @param blobAccess   {@link BlobAccess} to set in metadata
      * @param usermetadata Additional user metadata
@@ -810,6 +838,17 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                 .toCompletableFuture();
     }
 
+    /**
+     * This variant of the method does not perform a lock, so it could be used by
+     * method with prior lock.
+     * 
+     * @param container
+     * @param key
+     * @param blobAccess
+     * @param usermetadata
+     * @param entry
+     * @return
+     */
     private CompletableFuture<ExternalBlobMetadata> restoreMetadataWithoutLock(String container, String key,
             BlobAccess blobAccess,
             Map<String, String> usermetadata,
@@ -838,13 +877,21 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                         )
                         .thenCompose(metadata -> this.putWithoutLock(container, key, metadata)
                                 .thenApply(v -> metadata));
-            } else {
-                final RemoteFolder folder = entry.asFolder();
-                final ExternalBlobMetadata metadata = new ExternalBlobMetadata(container, key, folder.folderId(),
-                        key != null ? StorageType.FOLDER : StorageType.CONTAINER, blobAccess, BlobHashes.empty(),
-                        usermetadata);
+            } else if (entry.isFolder()) {
+                try {
+                    final RemoteFolder folder = entry.asFolder();
+                    final ExternalBlobMetadata metadata = new ExternalBlobMetadata(container, key, folder.folderId(),
+                            key != null ? StorageType.FOLDER : StorageType.CONTAINER, blobAccess, BlobHashes.empty(),
+                            usermetadata);
 
-                return this.putWithoutLock(container, key, metadata).thenApply(v -> metadata);
+                    return this.putWithoutLock(container, key, metadata).thenApply(v -> metadata);
+                } catch (IllegalStateException e) {
+                    LOGGER.warn("Entry neither folder nor file: {} in container {}", key, container);
+                    return CompletableFuture.completedFuture(ExternalBlobMetadata.EMPTY_METADATA);
+                }
+            } else {
+                LOGGER.warn("Entry neither folder nor file: {} in container {}", key, container);
+                return CompletableFuture.completedFuture(ExternalBlobMetadata.EMPTY_METADATA);
             }
         } else {
             return CompletableFuture.completedFuture(ExternalBlobMetadata.EMPTY_METADATA);

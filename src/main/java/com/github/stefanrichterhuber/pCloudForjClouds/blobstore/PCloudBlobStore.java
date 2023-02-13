@@ -234,6 +234,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @return ID of the parent folder for the key
      */
     private CompletableFuture<Long> assureParentFolder(String container, String targetKey) {
+        targetKey = stripDirectorySuffix(targetKey);
         if (targetKey.contains(SEPARATOR)) {
             final String key = getFolderOfKey(targetKey);
 
@@ -246,18 +247,6 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                             ExternalBlobMetadata md = new ExternalBlobMetadata(container, key, rf.folderId(),
                                     StorageType.FOLDER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
                             return md;
-                        })
-                        .exceptionallyCompose(e -> {
-                            if (e instanceof ApiError) {
-                                if (((ApiError) e).errorCode() == PCloudError.ALREADY_EXISTS.getCode()) {
-                                    return this.metadataStrategy.get(container, key);
-                                }
-                            }
-                            if (e instanceof RuntimeException) {
-                                throw (RuntimeException) e;
-                            } else {
-                                throw new RuntimeException(e);
-                            }
                         });
             };
             return this.metadataStrategy.getOrCreate(container, key, create).thenApply(em -> em.fileId());
@@ -654,23 +643,34 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         LOGGER.info("Delete container {}", container);
 
         assertContainerExists(container);
-        try {
-            // Remove folder and all files
-            final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
-            folder.delete(true);
 
-            // Delete metadata
-            this.metadataStrategy.list(container, ListContainerOptions.Builder.recursive())
-                    .thenCompose(ps -> PCloudUtils
-                            .allOf(ps.stream().map(em -> this.metadataStrategy.delete(em.container(), em.key()))
-                                    .collect(Collectors.toList())))
-                    .join();
-
-            LOGGER.debug("Successfully deleted container {}", container);
-        } catch (IOException | ApiError e) {
-            throw new PCloudBlobStoreException(e);
-        }
-
+        final String p = createPath(container);
+        // Remove folder and all files
+        PCloudUtils.execute(this.getApiClient()
+                .deleteFolder(p, true))
+                .thenCompose(r -> {
+                    if (r) {
+                        LOGGER.debug("Successfully deleted folder of container {}", container);
+                        return this.metadataStrategy.list(container, ListContainerOptions.Builder.recursive())
+                                .thenCompose(ps -> {
+                                    // Delete metadata of files within the container
+                                    return PCloudUtils.allOf(ps.stream()
+                                            .map(em -> this.metadataStrategy.delete(em.container(), em.key()))
+                                            .collect(Collectors.toList()));
+                                })
+                                .thenCompose(v -> {
+                                    LOGGER.debug("Successfully deleted metadata of files in container {}", container);
+                                    // Delete metadata of the container itself
+                                    return this.metadataStrategy.delete(container, null).thenApply(m -> true);
+                                }).thenApply(v -> {
+                                    LOGGER.debug("Successfully deleted metadata of container {}", container);
+                                    return v;
+                                });
+                    } else {
+                        LOGGER.warn("Failed to delete folder of container {}", container);
+                        return CompletableFuture.completedStage(r);
+                    }
+                }).join();
     }
 
     @Override
