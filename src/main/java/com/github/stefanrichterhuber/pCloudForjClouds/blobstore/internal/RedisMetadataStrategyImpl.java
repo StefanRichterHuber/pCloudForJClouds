@@ -12,12 +12,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
@@ -30,6 +28,7 @@ import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.domain.StorageType;
 import org.jclouds.blobstore.domain.internal.PageSetImpl;
 import org.jclouds.blobstore.options.ListContainerOptions;
+import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RMap;
 import org.redisson.api.RedissonClient;
@@ -43,7 +42,6 @@ import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.PCloudBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.DiffResponse.DiffEntry;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
-import com.google.common.hash.Hashing;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.stream.JsonReader;
@@ -55,6 +53,7 @@ import com.pcloud.sdk.RemoteFile;
 import com.pcloud.sdk.RemoteFolder;
 import com.pcloud.sdk.UploadOptions;
 
+import jodd.util.Base32;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -69,7 +68,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private final boolean active;
 
     private static final String REDIS_PREFIX = "PCloudBlobStore:";
-    private static final String REDIS_KEY_LAST_DIFF_PREFIX = "last-diff.";
+    private static final String REDIS_KEY_LAST_DIFF_PREFIX = "PCloudBlobStore-last-diff-of-user:";
 
     private final String redisKeyPrefix;
     private final String redisLastDiffKey;
@@ -86,6 +85,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private final Executor backgroundExecutor;
     private final RedissonClient redisson;
     private final RMap<String, String> redisCache;
+    private final RBucket<String> lastDiffCache;
 
     @Inject
     protected RedisMetadataStrategyImpl( //
@@ -106,7 +106,6 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         this.sanitizeInterval = sanitizeInterval;
         this.synchronizeInterval = synchronizeInterval;
         this.redisson = redisson;
-        this.redisCache = this.redisson.getMap(REDIS_PREFIX, StringCodec.INSTANCE);
 
         this.backgroundExecutor = Executors.newCachedThreadPool();
 
@@ -114,8 +113,10 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         try {
             final long userId = apiClient.getUserInfo().execute().userId();
 
-            this.redisKeyPrefix = String.format("%d:", userId);
+            this.redisKeyPrefix = String.format("%s%d:", REDIS_PREFIX, userId);
             this.redisLastDiffKey = String.format("%s%d:", REDIS_KEY_LAST_DIFF_PREFIX, userId);
+            this.redisCache = this.redisson.getMap(redisKeyPrefix, StringCodec.INSTANCE);
+            this.lastDiffCache = this.redisson.getBucket(redisLastDiffKey, StringCodec.INSTANCE);
         } catch (IOException | ApiError e) {
             throw new RuntimeException(e);
         }
@@ -165,7 +166,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param gson
      */
     private CompletableFuture<Void> loadMetadataDiffs(OkHttpClient httpClient, HttpUrl apiHost, Gson gson) {
-        final String diffId = this.redisCache.get(redisLastDiffKey);
+        final String diffId = this.lastDiffCache.get();
         LOGGER.info("Start syncing metadata files since {}", diffId);
         return loadMetadataDiffs(diffId, httpClient, apiHost, gson)
                 // Ignore errors in the run and hope for the next
@@ -210,14 +211,14 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                 return PCloudUtils
                         .allOf(applicableEntries.stream().map(this::applyDiff).collect(Collectors.toList()))
                         .thenComposeAsync(v -> {
-
-                            this.redisCache.put(redisLastDiffKey, currentDiffId);
-                            if (currentDiffId.equals(diffId)) {
-                                return CompletableFuture.completedFuture(null);
-                            } else {
-                                // Recursivly try next diffid
-                                return loadMetadataDiffs(currentDiffId, httpClient, apiHost, gson);
-                            }
+                            return this.lastDiffCache.setAsync(currentDiffId).thenCompose(a -> {
+                                if (currentDiffId.equals(diffId)) {
+                                    return CompletableFuture.completedFuture(null);
+                                } else {
+                                    // Recursively try next diffid
+                                    return loadMetadataDiffs(currentDiffId, httpClient, apiHost, gson);
+                                }
+                            });
                         }, backgroundExecutor);
             }
         });
@@ -256,8 +257,18 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      */
     private CompletableFuture<Void> applyDiff(DiffEntry entry) {
         if (entry.getEvent().equals(DiffEntry.EVENT_DELETEFILE)) {
-            // FIXME: Can be implemented after migration to a decodeable file name of
-            // metadata files
+            final String decodableName = entry.getMetadata().getName();
+            if ((decodableName.startsWith("CONTAINER.") || decodableName.startsWith("BLOB."))
+                    && decodableName.endsWith(".json")) {
+
+                final String container = getContainerFromMetadataFileName(decodableName);
+                final String key = getKeyFromMetadataFileName(decodableName);
+                if (container != null) {
+                    LOGGER.debug("Removed metadata for blob {}/{} from cache", container,
+                            key);
+                    return this.delete(container, key);
+                }
+            }
             return CompletableFuture.completedFuture(null);
         } else if (entry.getEvent().equals(DiffEntry.EVENT_CREATEFILE)
                 || entry.getEvent().equals(DiffEntry.EVENT_MODIFYFILE)) {
@@ -348,7 +359,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                                 } else {
                                     // File still exists, everything is fine, just check if it has the correct file
                                     // name (Support for future changes of naming schema)
-                                    final String canonicalFilename = this.getMetadataFileName(ebm.container(),
+                                    final String canonicalFilename = getMetadataFileName(ebm.container(),
                                             ebm.key());
                                     if (!metadataFile.name().equals(canonicalFilename)) {
                                         LOGGER.info("Renamed metadata file {} to canonical name {}",
@@ -479,7 +490,6 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                                 .toCompletableFuture();
                     }
                 });
-
     }
 
     @Override
@@ -545,16 +555,54 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return
      */
-    @SuppressWarnings("deprecation")
-    private String getMetadataFileName(String container, String key) {
-
-        // TODO change to base64 of filename or something alike with clear text
-        // container name
+    public static String getMetadataFileName(String container, String key) {
         if (key == null) {
             return "CONTAINER." + container + ".json";
         }
-        return "BLOB" + Hashing.md5().hashString(container + SEPARATOR + key, StandardCharsets.UTF_8).toString()
-                + ".json";
+        // BASE64 contains characters not valid in files, therefore use base32
+        return "BLOB." + container + "." + jodd.util.Base32.encode(key.getBytes(StandardCharsets.UTF_8)) + ".json";
+    }
+
+    /**
+     * Decodes a name generated by {@link #getMetadataFileName(String, String)}
+     * 
+     * @param name
+     * @return
+     */
+    public static String getContainerFromMetadataFileName(String name) {
+        final String[] parts = name.split("\\.");
+        // First part "BLOB." or "CONTAINER." prefix
+        // Second part container
+        // Third part encoded key (if present)
+        // Fourth part ".json" suffix
+
+        final String container = parts.length > 2 ? parts[1] : null;
+        return container;
+    }
+
+    /**
+     * Decodes a name generated by {@link #getMetadataFileName(String, String)}
+     * 
+     * @param name
+     * @return
+     */
+    public static String getKeyFromMetadataFileName(String name) {
+        if (name.startsWith("CONTAINER.")) {
+            // Container metadata files do not contain a key by definition
+            return null;
+        }
+        if (name.startsWith("BLOB.")) {
+            String[] parts = name.split("\\.");
+            // First part "BLOB." prefix
+            // Second part container
+            // Third part encoded key
+            // Fourth part ".json" suffix
+            String encoded = parts.length > 3 ? parts[2] : null;
+
+            String result = encoded != null ? new String(Base32.decode(encoded), StandardCharsets.UTF_8) : null;
+            return result;
+        }
+        return null;
     }
 
     /**
