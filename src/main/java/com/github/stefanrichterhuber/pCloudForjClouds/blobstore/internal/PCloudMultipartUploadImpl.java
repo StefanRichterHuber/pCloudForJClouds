@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -54,7 +55,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
     private final ApiClient apiClient;
     private final MetadataStrategy metadataStrategy;
 
-    private volatile long currentPartId = 0l;
+    private volatile AtomicLong currentPartId = new AtomicLong(0);
 
     private final PriorityBlockingQueue<QueueEntry> queue = new PriorityBlockingQueue<>();
 
@@ -138,8 +139,8 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                         // Are there any previous parts of the queue to write?
                         this.writeQueue(bos);
                         // Then check if this part is next in the queue
-                        if (partNumber == currentPartId + 1) {
-                            currentPartId++;
+                        if (partNumber == currentPartId.get() + 1) {
+                            currentPartId.incrementAndGet();
                             MessageDigest md5MD = MessageDigest.getInstance("MD5");
                             // We need to additionally calculate the checksum of only the part to transmit
                             try (InputStream src = new DigestInputStream(hashBuilder.wrap(payload.openStream()),
@@ -185,15 +186,15 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
      * @throws IOException
      */
     private void writeQueue(OutputStream target) throws IOException {
-        while (!queue.isEmpty() && queue.peek().getPartNumber() == currentPartId + 1) {
+        while (!queue.isEmpty() && queue.peek().getPartNumber() == currentPartId.get() + 1) {
             QueueEntry next = queue.poll();
-            if (next != null && next.getPartNumber() == currentPartId + 1) {
-                currentPartId++;
+            if (next != null && next.getPartNumber() == currentPartId.get() + 1) {
+                currentPartId.incrementAndGet();
                 try (InputStream src = hashBuilder.wrap(next.getPayload().openStream())) {
                     IOUtils.copyLarge(src, target);
                 }
                 LOGGER.debug("Uploaded queued part {} for multipart upload {}", next.getPartNumber(), id());
-            } else {
+            } else if (next != null) {
                 // Add back to queue
                 queue.add(next);
             }

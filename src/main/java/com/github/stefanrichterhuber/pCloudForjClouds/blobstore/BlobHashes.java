@@ -162,14 +162,15 @@ public class BlobHashes {
     public static BlobHashes from(Checksums cs) {
         if (cs == null) {
             return BlobHashes.empty();
+        } else {
+            final BlobHashes blobHashes = new BlobHashes(
+                    cs.getMd5() != null ? base16().lowerCase().encode(cs.getMd5().toByteArray()) : null, //
+                    cs.getSha1() != null ? base16().lowerCase().encode(cs.getSha1().toByteArray()) : null, //
+                    cs.getSha256() != null ? base16().lowerCase().encode(cs.getSha256().toByteArray()) : null, //
+                    cs.getFile() != null ? cs.getFile().hash() : null //
+            );
+            return blobHashes;
         }
-        final BlobHashes blobHashes = new BlobHashes(
-                cs.getMd5() != null ? base16().lowerCase().encode(cs.getMd5().toByteArray()) : null, //
-                cs.getSha1() != null ? base16().lowerCase().encode(cs.getSha1().toByteArray()) : null, //
-                cs.getSha256() != null ? base16().lowerCase().encode(cs.getSha256().toByteArray()) : null, //
-                cs.getFile() != null ? cs.getFile().hash() : null //
-        );
-        return blobHashes;
     }
 
     /**
