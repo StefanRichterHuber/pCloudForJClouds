@@ -54,6 +54,11 @@ import com.pcloud.sdk.UploadOptions;
 
 import jodd.util.Base32;
 
+/**
+ * Implementation of the {@link MetadataStrategy}, storing metadata as files in
+ * {@link PCloudConstants#PROPERTY_USERMETADATA_FOLDER} and additionally caching
+ * files in a Redis store.
+ */
 @Singleton
 public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisMetadataStrategyImpl.class);
@@ -157,7 +162,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             final long userId = apiClient.getUserInfo().execute().userId();
 
             this.redisKeyPrefix = String.format("%s%d:", REDIS_PREFIX, userId);
-            this.redisLastDiffKey = String.format("%s%d:", REDIS_KEY_LAST_DIFF_PREFIX, userId);
+            this.redisLastDiffKey = String.format("%s%d", REDIS_KEY_LAST_DIFF_PREFIX, userId);
             this.redisCache = this.redisson.getMap(redisKeyPrefix, StringCodec.INSTANCE);
             this.lastDiffCache = this.redisson.getBucket(redisLastDiffKey, StringCodec.INSTANCE);
         } catch (IOException | ApiError e) {
@@ -198,22 +203,26 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * diff referenced in the cache (or all if cache is empty), filter for the ones
      * concerning the metadatafolder and then process these
      * 
-     * @param httpClient
-     * @param apiHost
-     * @param gson
      */
     private CompletableFuture<Void> loadMetadataDiffs() {
-        final String diffId = this.lastDiffCache.get();
-        LOGGER.info("Start syncing metadata files since {}", diffId);
-        return loadMetadataDiffs(diffId != null ? Long.valueOf(diffId) : null)
-                // Ignore errors in the run and hope for the next
-                .exceptionally(e -> {
-                    LOGGER.warn("Error during fetching metadata: {}", e);
-                    return null;
-                })
-                .thenAccept(v -> {
+        final var lock = this.redisson.getLock(redisLastDiffKey + ".lock");
+        final long threadId = Thread.currentThread().getId();
+        return lock.lockAsync(threadId)
+                .thenComposeAsync(l -> this.lastDiffCache.getAsync(), backgroundExecutor)
+                .thenComposeAsync(diffId -> {
+                    LOGGER.info("Start syncing metadata files since {}", diffId != null ? diffId : "beginning");
+                    return loadMetadataDiffs(diffId != null ? Long.valueOf(diffId) : null);
+                }, backgroundExecutor)
+                .thenCompose(v -> {
                     LOGGER.info("Finished syncing metadata files");
-                });
+                    return lock.unlockAsync(threadId);
+                })
+                .exceptionallyCompose(e -> {
+                    // Ignore errors in the run and hope for the next run
+                    LOGGER.warn("Error during fetching metadata: {}", e);
+                    return lock.unlockAsync(threadId);
+                })
+                .toCompletableFuture();
     }
 
     /**
@@ -232,16 +241,10 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
 
                 return PCloudUtils
                         .allOf(applicableEntries.stream().map(this::applyDiff).collect(Collectors.toList()))
-                        .thenComposeAsync(v -> {
-                            return this.lastDiffCache.setAsync(Long.toString(currentDiffId)).thenCompose(a -> {
-                                if (currentDiffId.equals(diffId)) {
-                                    return CompletableFuture.completedFuture(null);
-                                } else {
-                                    // Recursively try next diffid
-                                    return loadMetadataDiffs(currentDiffId);
-                                }
-                            });
-                        }, backgroundExecutor);
+                        .thenComposeAsync(v -> this.lastDiffCache.setAsync(Long.toString(currentDiffId)),
+                                backgroundExecutor)
+                        .thenCompose(a -> currentDiffId.equals(diffId) ? CompletableFuture.completedFuture(null)
+                                : loadMetadataDiffs(currentDiffId));
             } else {
                 return CompletableFuture.completedFuture(null);
             }
@@ -304,16 +307,16 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         } else if (entry.getEvent().equals(DiffEntry.EVENT_CREATEFILE)
                 || entry.getEvent().equals(DiffEntry.EVENT_MODIFYFILE)) {
             return PCloudUtils.execute(this.apiClient.loadFile(entry.getMetadata().getFileid()))
-                    .thenAcceptAsync(re -> {
+                    .thenComposeAsync(re -> {
                         try {
                             final ExternalBlobMetadata blobMetadata = ExternalBlobMetadata.readJSON(re);
                             final String k = getRedisKey(blobMetadata.container(), blobMetadata.key());
                             final String v = blobMetadata.toJson();
-                            this.redisCache.put(k, v);
                             LOGGER.debug("Added metadata for blob {}/{} from remote to cache", blobMetadata.container(),
                                     blobMetadata.key());
+                            return this.redisCache.fastPutAsync(k, v).thenApply(m -> (Void) null);
                         } catch (IOException e) {
-                            throw new RuntimeException(e);
+                            return CompletableFuture.failedFuture(e);
                         }
                     }, backgroundExecutor)
                     .exceptionally(e -> {
@@ -535,7 +538,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * 
      * @param container Container of the blob
      * @param key       Key of the blob
-     * @return {@link ExternalBlobMetadata} found
+     * @return {@link ExternalBlobMetadata} found or null
      */
     private CompletableFuture<ExternalBlobMetadata> getFromRemote(@Nonnull String container, @Nullable String key) {
         if (active) {
@@ -563,7 +566,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * 
      * @param container Container of the blob
      * @param key       Key of the blob
-     * @return
+     * @return {@link ExternalBlobMetadata} found or null
      */
     private CompletableFuture<ExternalBlobMetadata> getFromCache(@Nonnull String container, @Nullable String key) {
         final String k = getRedisKey(container, key);
@@ -586,7 +589,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * 
      * @param container Container of the blob
      * @param key       Key of the blob
-     * @return
+     * @return File name created.
      */
     public static String getMetadataFileName(@Nonnull String container, @Nullable String key) {
         if (key == null) {
@@ -599,8 +602,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     /**
      * Decodes a name generated by {@link #getMetadataFileName(String, String)}
      * 
-     * @param fileName
-     * @return
+     * @param fileName File name to parse
+     * @return Blob container extracted from filename
      */
     public static String getContainerFromMetadataFileName(@Nonnull String fileName) {
         final String[] parts = fileName.split("\\.");
@@ -616,8 +619,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     /**
      * Decodes a name generated by {@link #getMetadataFileName(String, String)}
      * 
-     * @param fileName
-     * @return
+     * @param fileName File name to parse
+     * @return Blob key extracted from file name
      */
     public static String getKeyFromMetadataFileName(@Nonnull String fileName) {
         if (fileName.startsWith("CONTAINER.")) {
@@ -643,7 +646,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * 
      * @param container Container of the blob
      * @param key       Key of the blob
-     * @return {@link ExternalBlobMetadata} (if found)
+     * @return {@link ExternalBlobMetadata} or null
      */
     private CompletableFuture<ExternalBlobMetadata> getFromMetadataFolder(@Nonnull String container,
             @Nullable String key) {
@@ -738,9 +741,9 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * This variant of the method does not perform a lock, so it could be used by
      * method with prior lock.
      * 
-     * @param container
-     * @param key
-     * @param metadata
+     * @param container Container of the blob
+     * @param key       Key of the blob
+     * @param metadata  {@link ExternalBlobMetadata} to persist
      * @return
      */
     private CompletableFuture<Void> putWithoutLock(@Nonnull String container, @Nullable String key,
@@ -793,8 +796,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * This variant of the method does not perform a lock, so it could be used by
      * method with prior lock.
      * 
-     * @param container
-     * @param key
+     * @param container Container of the blob
+     * @param key       Key of the blob
      * @return
      */
     private CompletableFuture<Void> deleteWithoutLock(@Nonnull String container, @Nullable String key) {
@@ -926,12 +929,15 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * This variant of the method does not perform a lock, so it could be used by
      * method with prior lock.
      * 
-     * @param container
-     * @param key
-     * @param blobAccess
-     * @param usermetadata
-     * @param entry
-     * @return
+     * @param container    Container of the blob
+     * @param key          Key of the blob
+     * @param blobAccess   {@link BlobAccess} to set in the restored
+     *                     {@link ExternalBlobMetadata}
+     * @param usermetadata User metadata to set in the restored
+     *                     {@link ExternalBlobMetadata}
+     * @param entry        {@link RemoteFile} containg the Metadata of the file to
+     *                     restore
+     * @return {@link ExternalBlobMetadata} found.
      */
     private CompletableFuture<ExternalBlobMetadata> restoreMetadataWithoutLock(@Nonnull String container,
             @Nullable String key,

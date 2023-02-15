@@ -84,10 +84,10 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     public ExternalBlobMetadata(@Nonnull String container, String key, long id, StorageType storageType,
             BlobAccess access,
             BlobHashes hashes,
-            @Nonnull Map<String, String> customMetadata) {
+            Map<String, String> customMetadata) {
         super();
         this.hashes = hashes;
-        this.customMetadata = customMetadata;
+        this.customMetadata = customMetadata != null ? customMetadata : Collections.emptyMap();
         this.container = container;
         this.key = key;
         this.fileId = id;
