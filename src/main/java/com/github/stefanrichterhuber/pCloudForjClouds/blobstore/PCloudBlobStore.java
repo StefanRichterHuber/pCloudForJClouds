@@ -21,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Provider;
@@ -123,6 +125,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     private final MultipartUploadFactory multipartUploadFactory;
     private final MetadataStrategy metadataStrategy;
     private final long baseFolderId;
+    private final PCloudUtils utils;
+
     /**
      * Currently active multipart uploads, grouped by the id of the upload
      */
@@ -149,8 +153,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         this.pCloudBlobKeyValidator = checkNotNull(pCloudBlobKeyValidator, "PCloud blob key validator");
         this.defaultLocation = defaultLocation;
         this.apiClient = checkNotNull(apiClient, "PCloud api client");
+        this.utils = new PCloudUtils(apiClient);
         this.multipartUploadFactory = checkNotNull(multipartUploadFactory, "multipartupload factory");
-        this.baseFolderId = PCloudUtils.createBaseDirectory(this.apiClient, this.baseDirectory).folderId();
+        this.baseFolderId = utils.createBaseDirectory(this.baseDirectory).folderId();
         // Directly add the folder to the cache
         this.metadataStrategy = checkNotNull(metadataStrategy, "PCloud metadatastrategy");
 
@@ -233,9 +238,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param dir Directory to create
      * @return ID of the parent folder for the key
      */
-    private CompletableFuture<Long> assureParentFolder(String container, String targetKey) {
+    private CompletableFuture<Long> assureParentFolder(@Nonnull String container, @Nullable String targetKey) {
         targetKey = stripDirectorySuffix(targetKey);
-        if (targetKey.contains(SEPARATOR)) {
+        if (targetKey != null && targetKey.contains(SEPARATOR)) {
             final String key = getFolderOfKey(targetKey);
 
             final BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> create = (c, k) -> {
@@ -261,10 +266,12 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blob key
      * @return
      */
-    private static String getDirectoryBlobSuffix(String key) {
-        for (String suffix : BlobStoreConstants.DIRECTORY_SUFFIXES) {
-            if (key.endsWith(suffix)) {
-                return suffix;
+    private static String getDirectoryBlobSuffix(@Nullable String key) {
+        if (key != null) {
+            for (String suffix : BlobStoreConstants.DIRECTORY_SUFFIXES) {
+                if (key.endsWith(suffix)) {
+                    return suffix;
+                }
             }
         }
         return null;
@@ -276,9 +283,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blob key
      * @return
      */
-    public static String stripDirectorySuffix(String key) {
+    public static String stripDirectorySuffix(@Nullable String key) {
         String suffix = getDirectoryBlobSuffix(key);
-        if (suffix != null) {
+        if (key != null && suffix != null) {
             return key.substring(0, key.lastIndexOf(suffix));
         }
         return key;
@@ -348,7 +355,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param container Container to get metadata for
      * @return {@link StorageMetadata} found.
      */
-    private CompletableFuture<StorageMetadata> getContainerMetadata(String container) {
+    private CompletableFuture<StorageMetadata> getContainerMetadata(@Nonnull String container) {
         this.pCloudContainerNameValidator.validate(container);
         return this.metadataStrategy.get(container, null)
                 .thenCompose(md -> PCloudUtils.execute(this.getApiClient().loadFolder(md.fileId())))
@@ -375,8 +382,12 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @return Etag of the blob (contains a default value)
      * @throws IOException
      */
-    private String putDirectoryBlob(String containerName, Blob blob, PutOptions options) throws IOException {
-        String blobName = blob.getMetadata().getName();
+    private String putDirectoryBlob(@Nonnull String containerName, @Nonnull Blob blob, @Nullable PutOptions options)
+            throws IOException {
+        if (options == null) {
+            return putDirectoryBlob(containerName, blob, PutOptions.NONE);
+        }
+        final String blobName = blob.getMetadata().getName();
         LOGGER.info("Put directory blob {}/{} with options {}", containerName, blobName, options);
         final String directory = stripDirectorySuffix(blobName);
 

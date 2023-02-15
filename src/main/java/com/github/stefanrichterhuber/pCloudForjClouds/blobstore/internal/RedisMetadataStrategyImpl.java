@@ -1,8 +1,8 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal;
 
-import java.io.BufferedReader;
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
@@ -19,6 +19,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -42,9 +44,6 @@ import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.MetadataStrategy
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.PCloudBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.DiffResponse.DiffEntry;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.stream.JsonReader;
 import com.pcloud.sdk.ApiClient;
 import com.pcloud.sdk.ApiError;
 import com.pcloud.sdk.DataSource;
@@ -54,37 +53,79 @@ import com.pcloud.sdk.RemoteFolder;
 import com.pcloud.sdk.UploadOptions;
 
 import jodd.util.Base32;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
 
 @Singleton
 public class RedisMetadataStrategyImpl implements MetadataStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisMetadataStrategyImpl.class);
-
-    private static final String SEPARATOR = "/";
-
-    private final boolean active;
-
     private static final String REDIS_PREFIX = "PCloudBlobStore:";
     private static final String REDIS_KEY_LAST_DIFF_PREFIX = "PCloudBlobStore-last-diff-of-user:";
 
+    /**
+     * Seperator for folder / file names
+     */
+    private static final String SEPARATOR = "/";
+
+    /**
+     * Is this metadata strategy active?
+     */
+    private final boolean active;
+
+    /**
+     * Redis key prefix for folder / file blobs
+     */
     private final String redisKeyPrefix;
+    /**
+     * Redis key for last pCLoud Diff key
+     */
     private final String redisLastDiffKey;
 
+    /**
+     * Name of the metadata folder (e.g. /s3-metadata)
+     */
     private final String metadataFolder;
+    /**
+     * pCloud id of the metdata folder
+     */
     private final long metadataFolderId;
+    /**
+     * Name of the blob folder (e.g. /s3)
+     */
     private final String baseDirectory;
 
+    /**
+     * @see PCloudConstants#PROPERTY_SANITIZE_METADATA_INTERVAL_MIN
+     */
     private final int sanitizeInterval;
+
+    /**
+     * @see PCloudConstants#PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN
+     */
     private final int synchronizeInterval;
 
+    /**
+     * PCloud {@link ApiClient}
+     */
     private final ApiClient apiClient;
+    /**
+     * {@link PCloudUtils} instance
+     */
+    private final PCloudUtils utils;
 
+    /**
+     * {@link Executor} for background jobs (checking metadata files)
+     */
     private final Executor backgroundExecutor;
+    /**
+     * {@link RedissonClient} for all caching
+     */
     private final RedissonClient redisson;
+    /**
+     * Cache for bucket metadata
+     */
     private final RMap<String, String> redisCache;
+    /**
+     * Bucket for the last pCloud Diff
+     */
     private final RBucket<String> lastDiffCache;
 
     @Inject
@@ -99,17 +140,19 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             ApiClient apiClient //
     ) {
         this.active = active;
-        this.apiClient = apiClient;
-        this.baseDirectory = baseDir;
-        this.metadataFolder = metadataFolder;
-        this.metadataFolderId = PCloudUtils.createBaseDirectory(this.apiClient, metadataFolder).folderId();
+        this.apiClient = checkNotNull(apiClient, "pCloud API client");
+        this.baseDirectory = checkNotNull(baseDir, "Property" + PCloudConstants.PROPERTY_BASEDIR);
+        this.metadataFolder = checkNotNull(metadataFolder, "Property " + PCloudConstants.PROPERTY_USERMETADATA_FOLDER);
+        this.utils = new PCloudUtils(apiClient);
+        this.metadataFolderId = utils.createBaseDirectory(metadataFolder).folderId();
         this.sanitizeInterval = sanitizeInterval;
         this.synchronizeInterval = synchronizeInterval;
-        this.redisson = redisson;
+        this.redisson = checkNotNull(redisson, "RedissonClient");
 
         this.backgroundExecutor = Executors.newCachedThreadPool();
 
-        // We need to distinguish between different users in the cache
+        // We need to distinguish between different users in the shared cache, so add
+        // the user id to each redis key.
         try {
             final long userId = apiClient.getUserInfo().execute().userId();
 
@@ -121,18 +164,13 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
             throw new RuntimeException(e);
         }
 
-        syncMetadataCache();
+        scheduleSyncOfMetadataCache();
     }
 
     /**
      * Synchronizes the remote metadata folder regularly with the local cache
      */
-    private void syncMetadataCache() {
-        OkHttpClient httpClient = PCloudUtils.getHTTPClient(apiClient);
-        HttpUrl apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
-        final Gson gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation()
-                .setDateFormat("EEE, dd MMM yyyy HH:mm:ss zzzz").create();
-
+    private void scheduleSyncOfMetadataCache() {
         final ScheduledExecutorService service = Executors.newScheduledThreadPool(1);
 
         if (sanitizeInterval > 0) {
@@ -145,13 +183,12 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
         }
         if (synchronizeInterval > 0) {
             // Run once immediately, then every 5 minutes or so
-            service.scheduleAtFixedRate(() -> this.loadMetadataDiffs(httpClient, apiHost, gson).join(), 0,
+            service.scheduleAtFixedRate(() -> this.loadMetadataDiffs().join(), 0,
                     synchronizeInterval,
                     TimeUnit.MINUTES);
-
         }
         if (synchronizeInterval == 0) {
-            service.schedule(() -> this.loadMetadataDiffs(httpClient, apiHost, gson).join(), 0, TimeUnit.MINUTES);
+            service.schedule(() -> this.loadMetadataDiffs().join(), 0, TimeUnit.MINUTES);
         }
 
     }
@@ -165,10 +202,10 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param apiHost
      * @param gson
      */
-    private CompletableFuture<Void> loadMetadataDiffs(OkHttpClient httpClient, HttpUrl apiHost, Gson gson) {
+    private CompletableFuture<Void> loadMetadataDiffs() {
         final String diffId = this.lastDiffCache.get();
         LOGGER.info("Start syncing metadata files since {}", diffId);
-        return loadMetadataDiffs(diffId, httpClient, apiHost, gson)
+        return loadMetadataDiffs(diffId != null ? Long.valueOf(diffId) : null)
                 // Ignore errors in the run and hope for the next
                 .exceptionally(e -> {
                     LOGGER.warn("Error during fetching metadata: {}", e);
@@ -184,44 +221,31 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * diff , filter for the ones
      * concerning the metadatafolder and then process these
      * 
-     * @param diffId     Id of the latest diff already processed, might be null to
-     *                   process all diffs since start
-     * @param httpClient
-     * @param apiHost
-     * @param gson
+     * @param diffId Id of the latest diff already processed, might be null to
+     *               process all diffs since start
      */
-    private CompletableFuture<Void> loadMetadataDiffs(String diffId, OkHttpClient httpClient, HttpUrl apiHost,
-            Gson gson) {
-        HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
-                .addPathSegment("diff");
-        if (diffId != null) {
-            urlBuilder = urlBuilder.addQueryParameter("diffid", diffId);
-        }
-
-        final Request request = new Request.Builder().url(urlBuilder.build()).get().build();
-        return PCloudUtils.execute(httpClient.newCall(request)).thenComposeAsync(resp -> {
-            try (Response response = resp) {
-                final JsonReader reader = new JsonReader(
-                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
-                final DiffResponse r = gson.fromJson(reader, DiffResponse.class);
-
+    private CompletableFuture<Void> loadMetadataDiffs(@Nullable Long diffId) {
+        return utils.getDiff(diffId, null, false).thenComposeAsync(r -> {
+            if (r != null) {
                 final Collection<DiffEntry> applicableEntries = filterForCacheEntries(r.getEntries());
-                final String currentDiffId = Long.toString(r.getDiffid());
+                final Long currentDiffId = r.getDiffid();
 
                 return PCloudUtils
                         .allOf(applicableEntries.stream().map(this::applyDiff).collect(Collectors.toList()))
                         .thenComposeAsync(v -> {
-                            return this.lastDiffCache.setAsync(currentDiffId).thenCompose(a -> {
+                            return this.lastDiffCache.setAsync(Long.toString(currentDiffId)).thenCompose(a -> {
                                 if (currentDiffId.equals(diffId)) {
                                     return CompletableFuture.completedFuture(null);
                                 } else {
                                     // Recursively try next diffid
-                                    return loadMetadataDiffs(currentDiffId, httpClient, apiHost, gson);
+                                    return loadMetadataDiffs(currentDiffId);
                                 }
                             });
                         }, backgroundExecutor);
+            } else {
+                return CompletableFuture.completedFuture(null);
             }
-        });
+        }, backgroundExecutor);
     }
 
     /**
@@ -233,7 +257,11 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param entries {@link DiffEntry}s to filter
      * @return Filtered {@link DiffEntry}s.
      */
-    private Collection<DiffEntry> filterForCacheEntries(Collection<DiffEntry> entries) {
+    private Collection<DiffEntry> filterForCacheEntries(@Nullable Collection<DiffEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return Collections.emptyList();
+        }
+
         final Set<String> eventsToCheck = Set.of(DiffEntry.EVENT_CREATEFILE, DiffEntry.EVENT_DELETEFILE,
                 DiffEntry.EVENT_MODIFYFILE);
         final Map<Long, DiffEntry> applicableEntries = entries.stream()
@@ -255,7 +283,10 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param entry {@link DiffEntry} to apply
      * @return
      */
-    private CompletableFuture<Void> applyDiff(DiffEntry entry) {
+    private CompletableFuture<Void> applyDiff(@Nullable DiffEntry entry) {
+        if (entry == null) {
+            return CompletableFuture.completedFuture(null);
+        }
         if (entry.getEvent().equals(DiffEntry.EVENT_DELETEFILE)) {
             final String decodableName = entry.getMetadata().getName();
             if ((decodableName.startsWith("CONTAINER.") || decodableName.startsWith("BLOB."))
@@ -326,7 +357,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param metadataFile {@link RemoteFile} of the metadata file to check
      * @return {@link CompletableFuture} of the async operation.
      */
-    private CompletableFuture<Void> sanitizeMetadataFile(RemoteFile metadataFile) {
+    private CompletableFuture<Void> sanitizeMetadataFile(@Nonnull RemoteFile metadataFile) {
         return CompletableFuture
                 .supplyAsync(() -> {
                     // Read metadata from file
@@ -382,7 +413,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return
      */
-    private String getRedisKey(String container, String key) {
+    private String getRedisKey(@Nonnull String container, @Nullable String key) {
         if (key == null) {
             return container;
         }
@@ -395,8 +426,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * an existing file or use the factory to create the metadata.
      */
     @Override
-    public CompletableFuture<ExternalBlobMetadata> getOrCreate(String container, String key,
-            BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
+    public CompletableFuture<ExternalBlobMetadata> getOrCreate(@Nonnull String container, @Nullable String key,
+            @Nullable BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
 
         return this.getFromCache(container, key)
                 .thenCompose(olm -> {
@@ -437,8 +468,9 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param factory   Factory to create the metadata for the lob
      * @return {@link ExternalBlobMetadata} found / created
      */
-    private CompletableFuture<ExternalBlobMetadata> getOrCreateWithoutLock(String container, String key,
-            BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
+    private CompletableFuture<ExternalBlobMetadata> getOrCreateWithoutLock(@Nonnull String container,
+            @Nullable String key,
+            @Nullable BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
         return this.getFromCache(container, key)
                 .thenCompose(ebm -> {
                     if (ebm != null) {
@@ -493,7 +525,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     }
 
     @Override
-    public CompletableFuture<ExternalBlobMetadata> get(String container, String key) {
+    public CompletableFuture<ExternalBlobMetadata> get(@Nonnull String container, @Nullable String key) {
         return getOrCreate(container, key, null);
     }
 
@@ -505,7 +537,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link ExternalBlobMetadata} found
      */
-    private CompletableFuture<ExternalBlobMetadata> getFromRemote(String container, String key) {
+    private CompletableFuture<ExternalBlobMetadata> getFromRemote(@Nonnull String container, @Nullable String key) {
         if (active) {
             // Data not found in local cache, try remote metadata folder
             return this.getFromMetadataFolder(container, key)
@@ -521,7 +553,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                         }
                     });
         } else {
-            return CompletableFuture.completedFuture(ExternalBlobMetadata.EMPTY_METADATA);
+            return CompletableFuture.completedFuture(new ExternalBlobMetadata(container, key, 0, null,
+                    BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap()));
         }
     }
 
@@ -532,7 +565,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return
      */
-    private CompletableFuture<ExternalBlobMetadata> getFromCache(String container, String key) {
+    private CompletableFuture<ExternalBlobMetadata> getFromCache(@Nonnull String container, @Nullable String key) {
         final String k = getRedisKey(container, key);
         return this.redisCache.getAsync(k)
                 .thenApply(v -> {
@@ -555,7 +588,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return
      */
-    public static String getMetadataFileName(String container, String key) {
+    public static String getMetadataFileName(@Nonnull String container, @Nullable String key) {
         if (key == null) {
             return "CONTAINER." + container + ".json";
         }
@@ -566,11 +599,11 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     /**
      * Decodes a name generated by {@link #getMetadataFileName(String, String)}
      * 
-     * @param name
+     * @param fileName
      * @return
      */
-    public static String getContainerFromMetadataFileName(String name) {
-        final String[] parts = name.split("\\.");
+    public static String getContainerFromMetadataFileName(@Nonnull String fileName) {
+        final String[] parts = fileName.split("\\.");
         // First part "BLOB." or "CONTAINER." prefix
         // Second part container
         // Third part encoded key (if present)
@@ -583,16 +616,16 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     /**
      * Decodes a name generated by {@link #getMetadataFileName(String, String)}
      * 
-     * @param name
+     * @param fileName
      * @return
      */
-    public static String getKeyFromMetadataFileName(String name) {
-        if (name.startsWith("CONTAINER.")) {
+    public static String getKeyFromMetadataFileName(@Nonnull String fileName) {
+        if (fileName.startsWith("CONTAINER.")) {
             // Container metadata files do not contain a key by definition
             return null;
         }
-        if (name.startsWith("BLOB.")) {
-            String[] parts = name.split("\\.");
+        if (fileName.startsWith("BLOB.")) {
+            String[] parts = fileName.split("\\.");
             // First part "BLOB." prefix
             // Second part container
             // Third part encoded key
@@ -612,7 +645,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link ExternalBlobMetadata} (if found)
      */
-    private CompletableFuture<ExternalBlobMetadata> getFromMetadataFolder(String container, String key) {
+    private CompletableFuture<ExternalBlobMetadata> getFromMetadataFolder(@Nonnull String container,
+            @Nullable String key) {
         String filename = getMetadataFileName(container, key);
         return PCloudUtils.execute(this.apiClient.loadFile(metadataFolder + SEPARATOR + filename))
                 .thenApplyAsync(rf -> {
@@ -649,7 +683,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link ExternalBlobMetadata} (if found)
      */
-    private CompletableFuture<ExternalBlobMetadata> restoreFromFile(String container, String key) {
+    private CompletableFuture<ExternalBlobMetadata> restoreFromFile(@Nonnull String container, @Nullable String key) {
         String filename = createPath(container, key);
         if (key == null) {
             // This is a container blob
@@ -686,7 +720,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     }
 
     @Override
-    public CompletableFuture<Void> put(String container, String key, ExternalBlobMetadata metadata) {
+    public CompletableFuture<Void> put(@Nonnull String container, @Nullable String key,
+            @Nonnull ExternalBlobMetadata metadata) {
         final String k = getRedisKey(container, key);
         final RLock lock = this.redisCache.getLock(k);
         final long threadId = Thread.currentThread().getId();
@@ -708,7 +743,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param metadata
      * @return
      */
-    private CompletableFuture<Void> putWithoutLock(String container, String key, ExternalBlobMetadata metadata) {
+    private CompletableFuture<Void> putWithoutLock(@Nonnull String container, @Nullable String key,
+            ExternalBlobMetadata metadata) {
         if (active) {
             if (metadata != null) {
                 final String filename = getMetadataFileName(container, key);
@@ -740,7 +776,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     }
 
     @Override
-    public CompletableFuture<Void> delete(String container, String key) {
+    public CompletableFuture<Void> delete(@Nonnull String container, @Nullable String key) {
         final String k = getRedisKey(container, key);
         final RLock lock = this.redisCache.getLock(k);
         final long threadId = Thread.currentThread().getId();
@@ -761,7 +797,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key
      * @return
      */
-    private CompletableFuture<Void> deleteWithoutLock(String container, String key) {
+    private CompletableFuture<Void> deleteWithoutLock(@Nonnull String container, @Nullable String key) {
         if (active) {
             final String filename = this.metadataFolder + SEPARATOR + getMetadataFileName(container, key);
             final String k = getRedisKey(container, key);
@@ -786,14 +822,13 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     }
 
     @Override
-    public CompletableFuture<PageSet<ExternalBlobMetadata>> list(String containerName,
-            ListContainerOptions options) {
+    public CompletableFuture<PageSet<ExternalBlobMetadata>> list(@Nonnull String containerName,
+            @Nullable ListContainerOptions options) {
+        if (options == null) {
+            return list(containerName, ListContainerOptions.NONE);
+        }
         if (active) {
             LOGGER.debug("List metadata for container {} with options {}", containerName, options);
-
-            if (options == null) {
-                return list(containerName, ListContainerOptions.NONE);
-            }
 
             // number of results to fetch
             final int resultsToFetch = options.getMaxResults() != null ? options.getMaxResults() : 1000;
@@ -870,9 +905,10 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param entry        {@link RemoteEntry} to generate the metadata for.
      * @return {@link ExternalBlobMetadata} generated and stored in cache.
      */
-    public CompletableFuture<ExternalBlobMetadata> restoreMetadata(String container, String key, BlobAccess blobAccess,
-            Map<String, String> usermetadata,
-            RemoteEntry entry) {
+    public CompletableFuture<ExternalBlobMetadata> restoreMetadata(@Nonnull String container, @Nullable String key,
+            @Nonnull BlobAccess blobAccess,
+            @Nonnull Map<String, String> usermetadata,
+            @Nonnull RemoteEntry entry) {
 
         final String k = getRedisKey(container, key);
         final RLock lock = this.redisCache.getLock(k);
@@ -897,14 +933,15 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param entry
      * @return
      */
-    private CompletableFuture<ExternalBlobMetadata> restoreMetadataWithoutLock(String container, String key,
-            BlobAccess blobAccess,
-            Map<String, String> usermetadata,
-            RemoteEntry entry) {
+    private CompletableFuture<ExternalBlobMetadata> restoreMetadataWithoutLock(@Nonnull String container,
+            @Nullable String key,
+            @Nonnull BlobAccess blobAccess,
+            @Nonnull Map<String, String> usermetadata,
+            @Nonnull RemoteEntry entry) {
         if (active) {
             if (entry.isFile()) {
                 final RemoteFile file = entry.asFile();
-                return PCloudUtils.calculateChecksum(apiClient, file.fileId())
+                return utils.calculateChecksum(file.fileId())
                         .thenApplyAsync(blobHashes -> {
                             // european pCloud locations do not deliver MD5 checksums -> so calculate
                             // manually (although very expensive :/)

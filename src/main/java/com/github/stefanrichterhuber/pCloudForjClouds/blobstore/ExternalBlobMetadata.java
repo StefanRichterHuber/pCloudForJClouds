@@ -9,6 +9,8 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 
+import javax.annotation.Nonnull;
+
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.StorageType;
 
@@ -45,12 +47,14 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
      * User defined metadata of the target file
      */
     @Expose
+    @Nonnull
     private Map<String, String> customMetadata;
 
     /**
      * Container containing the blob
      */
     @Expose
+    @Nonnull
     private String container;
 
     /**
@@ -77,9 +81,10 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     @Expose
     private StorageType storageType;
 
-    public ExternalBlobMetadata(String container, String key, long id, StorageType storageType, BlobAccess access,
+    public ExternalBlobMetadata(@Nonnull String container, String key, long id, StorageType storageType,
+            BlobAccess access,
             BlobHashes hashes,
-            Map<String, String> customMetadata) {
+            @Nonnull Map<String, String> customMetadata) {
         super();
         this.hashes = hashes;
         this.customMetadata = customMetadata;
@@ -94,10 +99,12 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
         return hashes;
     }
 
+    @Nonnull
     public Map<String, String> customMetadata() {
         return customMetadata;
     }
 
+    @Nonnull
     public String container() {
         return this.container;
     }
@@ -200,8 +207,8 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     @Override
     public int compareTo(ExternalBlobMetadata o) {
         if (this.container().equals(o.container())) {
-            
-            if(this.key() == null) {
+
+            if (this.key() == null) {
                 return -1;
             }
             return this.key().compareTo(o.key());

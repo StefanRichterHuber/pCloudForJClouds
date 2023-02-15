@@ -1,5 +1,7 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -12,12 +14,16 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.BlobHashes;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 import com.google.common.base.Optional;
+import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.stream.JsonReader;
 import com.pcloud.sdk.ApiClient;
@@ -36,13 +42,23 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
 
-public final class PCloudUtils {
+public class PCloudUtils {
     private static final Logger LOGGER = LoggerFactory.getLogger(PCloudUtils.class);
 
     private static final String SEPARATOR = "/";
 
-    private PCloudUtils() {
-        throw new AssertionError("intentionally unimplemented");
+    private final OkHttpClient httpClient;
+    private final HttpUrl apiHost;
+    private final ApiClient apiClient;
+    private static final Gson GSON = new GsonBuilder().excludeFieldsWithoutExposeAnnotation()
+            .setDateFormat("EEE, dd MMM yyyy HH:mm:ss zzzz").create();
+
+    public PCloudUtils(ApiClient apiClient) {
+        this.apiClient = checkNotNull(apiClient, "pCloud API Client");
+        this.httpClient = checkNotNull(PCloudUtils.getHTTPClient(apiClient),
+                "Failed to create HTTP client");
+        this.apiHost = checkNotNull(HttpUrl.parse("https://" + apiClient.apiHost()),
+                "Failed to create API Host to pCloud");
     }
 
     /**
@@ -133,17 +149,22 @@ public final class PCloudUtils {
      * @param apiClient
      * @return
      */
-    public static OkHttpClient getHTTPClient(ApiClient apiClient) {
+    @Nonnull
+    public static OkHttpClient getHTTPClient(@Nonnull ApiClient apiClient) {
         OkHttpClient.Builder httpClientBuilder = new OkHttpClient.Builder()
-//              .readTimeout(builder.readTimeoutMs(), TimeUnit.MILLISECONDS)
-//              .writeTimeout(builder.writeTimeoutMs(), TimeUnit.MILLISECONDS)
-//              .connectTimeout(builder.connectTimeoutMs(), TimeUnit.MILLISECONDS)
+                // .readTimeout(builder.readTimeoutMs(), TimeUnit.MILLISECONDS)
+                // .writeTimeout(builder.writeTimeoutMs(), TimeUnit.MILLISECONDS)
+                // .connectTimeout(builder.connectTimeoutMs(), TimeUnit.MILLISECONDS)
                 .protocols(Collections.singletonList(Protocol.HTTP_1_1));
         // .addInterceptor(new GlobalRequestInterceptor(userAgent, globalParams));
 
         httpClientBuilder.addInterceptor((Interceptor) apiClient.authenticator());
         OkHttpClient httpClient = httpClientBuilder.build();
-        return httpClient;
+        if (httpClient != null) {
+            return httpClient;
+        } else {
+            throw new IllegalStateException("Unable to construct http client from pCloud API Client");
+        }
     }
 
     /**
@@ -151,16 +172,10 @@ public final class PCloudUtils {
      * location of the pCloud store. Unfortunately no MD5 for European customers :/
      * 
      * @see https://docs.pcloud.com/methods/file/checksumfile.html
-     * @param apiClient {@link ApiClient} to access the pCloud backend
-     * @param filePath  Path fo the file
+     * @param filePath Path fo the file
      * @return Checksums calculated
      */
-    public static CompletableFuture<BlobHashes> calculateChecksum(ApiClient apiClient, String filePath) {
-        var apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
-        var httpClient = PCloudUtils.getHTTPClient(apiClient);
-
-        var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
-
+    public CompletableFuture<BlobHashes> calculateChecksum(String filePath) {
         final HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
                 .addPathSegment("checksumfile") //
                 .addQueryParameter("path", filePath) //
@@ -170,10 +185,15 @@ public final class PCloudUtils {
 
         return execute(httpClient.newCall(request)).thenApply(resp -> {
             try (Response response = resp) {
-                JsonReader reader = new JsonReader(
-                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
-                BlobHashes result = gson.fromJson(reader, BlobHashes.class);
-                return result;
+                var body = response.body();
+                if (body != null) {
+                    final JsonReader reader = new JsonReader(
+                            new BufferedReader(new InputStreamReader(body.byteStream())));
+                    final BlobHashes result = GSON.fromJson(reader, BlobHashes.class);
+                    return result;
+                } else {
+                    return null;
+                }
             }
         });
     }
@@ -183,29 +203,28 @@ public final class PCloudUtils {
      * location of the pCloud store. Unfortunately no MD5 for European customers :/
      * 
      * @see https://docs.pcloud.com/methods/file/checksumfile.html
-     * @param apiClient {@link ApiClient} to access the pCloud backend
-     * @param fileId    ID of the file
+     * @param fileId ID of the file
      * @return Checksums calculated
      */
-    public static CompletableFuture<BlobHashes> calculateChecksum(ApiClient apiClient, long fileId) {
-        var apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
-        var httpClient = PCloudUtils.getHTTPClient(apiClient);
-
-        var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
-
+    public CompletableFuture<BlobHashes> calculateChecksum(long fileId) {
         final HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
                 .addPathSegment("checksumfile") //
                 .addQueryParameter("fileid", Long.toString(fileId)) //
         ;
 
-        Request request = new Request.Builder().url(urlBuilder.build()).get().build();
+        final Request request = new Request.Builder().url(urlBuilder.build()).get().build();
 
         return execute(httpClient.newCall(request)).thenApply(resp -> {
             try (Response response = resp) {
-                JsonReader reader = new JsonReader(
-                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
-                BlobHashes result = gson.fromJson(reader, BlobHashes.class);
-                return result;
+                final var body = response.body();
+                if (body != null) {
+                    final JsonReader reader = new JsonReader(
+                            new BufferedReader(new InputStreamReader(body.byteStream())));
+                    final BlobHashes result = GSON.fromJson(reader, BlobHashes.class);
+                    return result;
+                } else {
+                    return null;
+                }
             }
         });
     }
@@ -220,11 +239,9 @@ public final class PCloudUtils {
      * 
      * @return
      */
-    public static CompletableFuture<GetApiResponse> getApiServer(String apiEndpoint) {
+    public static CompletableFuture<GetApiResponse> getApiServer(@Nonnull String apiEndpoint) {
         final OkHttpClient httpClient = new OkHttpClient.Builder()
                 .protocols(Collections.singletonList(Protocol.HTTP_1_1)).build();
-
-        var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
 
         final HttpUrl.Builder urlBuilder = HttpUrl.parse("https://" + apiEndpoint).newBuilder() //
                 .addPathSegment("getapiserver") //
@@ -234,10 +251,15 @@ public final class PCloudUtils {
 
         return execute(httpClient.newCall(request)).thenApply(resp -> {
             try (Response response = resp) {
-                JsonReader reader = new JsonReader(
-                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
-                GetApiResponse result = gson.fromJson(reader, GetApiResponse.class);
-                return result;
+                var body = response.body();
+                if (body != null) {
+                    JsonReader reader = new JsonReader(
+                            new BufferedReader(new InputStreamReader(body.byteStream())));
+                    GetApiResponse result = GSON.fromJson(reader, GetApiResponse.class);
+                    return result;
+                } else {
+                    return null;
+                }
             }
         });
     }
@@ -254,14 +276,8 @@ public final class PCloudUtils {
      * @param block     Block until an event arrives
      * @return
      */
-    public static CompletableFuture<DiffResponse> getDiff(ApiClient apiClient, Long diffId, Integer limit,
+    public CompletableFuture<DiffResponse> getDiff(@Nullable Long diffId, @Nullable Integer limit,
             boolean block) {
-        var apiHost = HttpUrl.parse("https://" + apiClient.apiHost());
-        var httpClient = PCloudUtils.getHTTPClient(apiClient);
-
-        var gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation()
-                .setDateFormat("EEE, dd MMM yyyy HH:mm:ss zzzz").create();
-
         HttpUrl.Builder urlBuilder = apiHost.newBuilder() //
                 .addPathSegment("diff") //
         ;
@@ -279,10 +295,15 @@ public final class PCloudUtils {
 
         return execute(httpClient.newCall(request)).thenApply(resp -> {
             try (Response response = resp) {
-                JsonReader reader = new JsonReader(
-                        new BufferedReader(new InputStreamReader(response.body().byteStream())));
-                DiffResponse result = gson.fromJson(reader, DiffResponse.class);
-                return result;
+                var body = response.body();
+                if (body != null) {
+                    final JsonReader reader = new JsonReader(
+                            new BufferedReader(new InputStreamReader(body.byteStream())));
+                    final DiffResponse result = GSON.fromJson(reader, DiffResponse.class);
+                    return result;
+                } else {
+                    return null;
+                }
             }
         });
 
@@ -290,8 +311,11 @@ public final class PCloudUtils {
 
     /**
      * Creates a folder and all necessary root folders
+     * 
+     * @param folder Folder to create
+     * @return {@link RemoteFolder} created
      */
-    public static RemoteFolder createBaseDirectory(ApiClient apiClient, String folder) {
+    public RemoteFolder createBaseDirectory(String folder) {
         if (folder == null || folder.equals("")) {
             folder = SEPARATOR;
         }
@@ -312,7 +336,7 @@ public final class PCloudUtils {
         }
 
         final String parentDir = folder.substring(0, folder.lastIndexOf(SEPARATOR));
-        final RemoteFolder parentFolder = createBaseDirectory(apiClient, parentDir);
+        final RemoteFolder parentFolder = createBaseDirectory(parentDir);
 
         // Parent folders are all created -> now create folder itself
         final String name = folder.substring(folder.lastIndexOf(SEPARATOR) + 1);

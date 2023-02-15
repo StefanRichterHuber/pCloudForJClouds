@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import javax.annotation.Nonnull;
+
 import org.apache.commons.io.IOUtils;
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.BlobMetadata;
@@ -78,7 +80,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
      * @return {@link PCloudMultipartUpload}
      */
     public PCloudMultipartUploadImpl(ApiClient apiClient, MetadataStrategy metadataStrategy, PCloudFileOps fileOps,
-            long folderId, String containerName,
+            long folderId, @Nonnull String containerName,
             String blobName, String id, BlobMetadata blobMetadata, PutOptions putOptions) {
         super(containerName, folderId, blobName, id, blobMetadata, putOptions);
         this.fileOps = fileOps;

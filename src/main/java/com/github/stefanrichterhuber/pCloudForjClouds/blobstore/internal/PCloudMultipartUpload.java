@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import javax.annotation.Nonnull;
+
 import org.jclouds.blobstore.domain.BlobMetadata;
 import org.jclouds.blobstore.domain.MultipartPart;
 import org.jclouds.blobstore.domain.MultipartUpload;
@@ -20,6 +22,7 @@ import com.pcloud.sdk.RemoteFile;
  *
  */
 public abstract class PCloudMultipartUpload extends MultipartUpload {
+    @Nonnull
     protected final String containerName;
     protected final String blobName;
     protected final String id;
@@ -29,7 +32,7 @@ public abstract class PCloudMultipartUpload extends MultipartUpload {
 
     protected List<MultipartPart> parts = new CopyOnWriteArrayList<>();
 
-    public PCloudMultipartUpload(String containerName, long folderId, String blobName, String id,
+    public PCloudMultipartUpload(@Nonnull String containerName, long folderId, String blobName, String id,
             BlobMetadata blobMetadata,
             PutOptions putOptions) {
         super();

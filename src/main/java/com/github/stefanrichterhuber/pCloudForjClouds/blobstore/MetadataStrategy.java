@@ -5,6 +5,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import org.jclouds.blobstore.domain.BlobAccess;
 import org.jclouds.blobstore.domain.PageSet;
 import org.jclouds.blobstore.options.ListContainerOptions;
@@ -26,7 +29,7 @@ public interface MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link CompletableFuture} containing the result of the operation.
      */
-    CompletableFuture<ExternalBlobMetadata> get(String container, String key);
+    CompletableFuture<ExternalBlobMetadata> get(@Nonnull String container, @Nullable String key);
 
     /**
      * Retrieves the metadata for the given blob. If not found, create a new one
@@ -38,7 +41,7 @@ public interface MetadataStrategy {
      *                  {@link ExternalBlobMetadata}.
      * @return {@link CompletableFuture} containing the result of the operation.
      */
-    default CompletableFuture<ExternalBlobMetadata> getOrCreate(String container, String key,
+    default CompletableFuture<ExternalBlobMetadata> getOrCreate(@Nonnull String container, @Nullable String key,
             BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
         return this.get(container, key).thenCompose(em -> {
             if (em != null) {
@@ -58,7 +61,8 @@ public interface MetadataStrategy {
      * @param metadata  {@link ExternalBlobMetadata} to persist for the given blob
      * @return {@link CompletableFuture} of the operation.
      */
-    CompletableFuture<Void> put(String container, String key, ExternalBlobMetadata metadata);
+    CompletableFuture<Void> put(@Nonnull String container, @Nullable String key,
+            @Nonnull ExternalBlobMetadata metadata);
 
     /**
      * Deletes the metadata for a blob
@@ -67,7 +71,7 @@ public interface MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link CompletableFuture} of the operation.
      */
-    CompletableFuture<Void> delete(String container, String key);
+    CompletableFuture<Void> delete(@Nonnull String container, @Nullable String key);
 
     /**
      * Lists all metadata keys for the given container mathing the given
@@ -77,8 +81,8 @@ public interface MetadataStrategy {
      * @param options       {@link ListContainerOptions} to apply
      * @return
      */
-    CompletableFuture<PageSet<ExternalBlobMetadata>> list(String containerName,
-            ListContainerOptions options);
+    CompletableFuture<PageSet<ExternalBlobMetadata>> list(@Nonnull String containerName,
+            @Nullable ListContainerOptions options);
 
     /**
      * Restores the metadata entries (without custom metadata!) for the given
@@ -91,6 +95,7 @@ public interface MetadataStrategy {
      * @param entry        {@link RemoteEntry} to generate the metadata for.
      * @return {@link ExternalBlobMetadata} generated and stored in cache.
      */
-    CompletableFuture<ExternalBlobMetadata> restoreMetadata(String container, String key, BlobAccess blobAccess,
-            Map<String, String> usermetadata, RemoteEntry entry);
+    CompletableFuture<ExternalBlobMetadata> restoreMetadata(@Nonnull String container, @Nullable String key,
+            @Nonnull BlobAccess blobAccess,
+            @Nonnull Map<String, String> usermetadata, @Nonnull RemoteEntry entry);
 }

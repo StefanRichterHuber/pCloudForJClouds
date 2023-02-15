@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 
+import javax.annotation.Nonnull;
 import javax.inject.Inject;
 import javax.inject.Named;
 
@@ -29,7 +30,9 @@ import com.pcloud.sdk.PCloudSdk;
 public class PCloudApiClientProvider implements Provider<ApiClient> {
     private final static Logger LOGGER = LoggerFactory.getLogger(PCloudApiClientProvider.class);
 
+    @Nonnull
     private final String clientSecret;
+    @Nonnull
     private final String pCloudHost;
 
     /**
@@ -46,9 +49,10 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
         this.clientSecret = checkNotNull(clientSecret, "Property " + PCloudConstants.PROPERTY_CLIENT_SECRET);
         // pCloudHost = pCloudHost != null ? pCloudHost :
         // PCloudUtils.testForAPIEndpoint(clientSecret).orNull();
-//        this.pCloudHost = checkNotNull(pCloudHost, "Property " + Constants.PROPERTY_ENDPOINT);
+        // this.pCloudHost = checkNotNull(pCloudHost, "Property " +
+        // Constants.PROPERTY_ENDPOINT);
         // this.pCloudHost = PCloudUtils.testForAPIEndpoint(clientSecret).orNull();
-        this.pCloudHost = PCloudUtils.testForAPIEndpoint(clientSecret).orNull();
+        this.pCloudHost = PCloudUtils.testForAPIEndpoint(clientSecret).get();
     }
 
     /**
@@ -58,14 +62,15 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
      * @param clientSecret client secret
      * @return {@link ApiClient}
      */
-    public static final ApiClient create(String pCloudHost, String clientSecret) {
-        GetApiResponse apiResponse = PCloudUtils.getApiServer(pCloudHost).join();
-        if (apiResponse.getResult() == 0 && apiResponse.getApi().size() > 0
-                && !apiResponse.getApi().get(0).equals(pCloudHost)) {
+    public static final ApiClient create(@Nonnull String pCloudHost, @Nonnull String clientSecret) {
+        final GetApiResponse apiResponse = PCloudUtils.getApiServer(pCloudHost).join();
+        if (apiResponse != null && apiResponse.getResult() == 0 && apiResponse.getApi().size() > 0
+                && !pCloudHost.equals(apiResponse.getApi().get(0))) {
+            final String closestApi = apiResponse.getApi().get(0);
             LOGGER.info("Determined nearest API endpoint '{}' for general API endpoint '{}'",
-                    apiResponse.getApi().get(0),
+                    closestApi,
                     pCloudHost);
-            pCloudHost = apiResponse.getApi().get(0);
+            pCloudHost = closestApi != null ? closestApi : pCloudHost;
         }
 
         return PCloudSdk.newClientBuilder().apiHost(pCloudHost)
