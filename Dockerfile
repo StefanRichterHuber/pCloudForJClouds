@@ -1,4 +1,4 @@
-FROM openjdk:18-slim
+FROM openjdk:17-slim
 
 RUN mkdir /opt/app && mkdir /opt/app/libs
 
