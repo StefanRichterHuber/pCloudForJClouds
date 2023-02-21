@@ -5,7 +5,7 @@
 	<version>0.0.1-SNAPSHOT</version>
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-		<java.version>17</java.version>
+		<java.version>18</java.version>
 		<guice.version>5.1.0</guice.version>
 	</properties>
 	<dependencies>

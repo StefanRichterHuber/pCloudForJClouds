@@ -118,6 +118,21 @@ public class PCloudUtils {
     }
 
     /**
+     * Waits for a
+     * {@link Collection} of {@link CompletableFuture}s to a
+     * {@link CompletableFuture} using
+     * {@link CompletableFuture#allOf(CompletableFuture...)}
+     * 
+     * @param <T>
+     * @param jobs {@link Collection} of {@link CompletableFuture}s to convert
+     * @return
+     */
+    public static <T> CompletableFuture<Void> join(final Collection<CompletableFuture<?>> jobs) {
+        return CompletableFuture.allOf(jobs.toArray(new CompletableFuture[jobs.size()]));
+    }
+
+
+    /**
      * Utility function to execute a {okhttp3.Call} async and wrap its results into
      * a {@link CompletableFuture}.
      * 

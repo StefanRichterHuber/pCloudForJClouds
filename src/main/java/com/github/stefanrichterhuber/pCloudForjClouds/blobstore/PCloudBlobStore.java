@@ -619,7 +619,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 .thenCompose(contents -> {
                     // Fetch the actual blobs
                     final CompletableFuture<PageSet<? extends StorageMetadata>> results = PCloudUtils
-                            .allOf(contents.stream().map(this::loadStorageMetadata).collect(Collectors.toList()))
+                            .allOf(contents.stream().map(md -> loadStorageMetadata(md).thenApply(sm -> (StorageMetadata)sm )).collect(Collectors.toList()))
                             .thenApply(sm -> sm.stream().filter(e -> e != null)
                                     .collect(Collectors.toCollection(TreeSet::new)))
                             .thenApply(sm -> new PageSetImpl<StorageMetadata>(sm, contents.getNextMarker()));
