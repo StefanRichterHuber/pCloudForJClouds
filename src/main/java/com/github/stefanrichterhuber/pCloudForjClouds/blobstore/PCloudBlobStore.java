@@ -559,16 +559,14 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         LOGGER.info("Create container {} in location {}", container, location);
 
         this.pCloudContainerNameValidator.validate(container);
-        try {
-
-            final RemoteFolder remoteFolder = this.getApiClient().createFolder(createPath(container)).execute();
-            final ExternalBlobMetadata blobMetadata = new ExternalBlobMetadata(container, null, remoteFolder.folderId(),
-                    StorageType.CONTAINER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
-            this.metadataStrategy.put(container, null, blobMetadata);
-            return remoteFolder.isFolder();
-        } catch (IOException | ApiError e) {
-            throw new PCloudBlobStoreException(e);
-        }
+        return PCloudUtils.execute(this.getApiClient().createFolder(createPath(container)))
+                .thenCompose(remoteFolder -> {
+                    final ExternalBlobMetadata blobMetadata = new ExternalBlobMetadata(container, null,
+                            remoteFolder.folderId(),
+                            StorageType.CONTAINER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
+                    return this.metadataStrategy.put(container, null, blobMetadata)
+                            .thenApply(v -> remoteFolder.isFolder());
+                }).join();
     }
 
     @Override
