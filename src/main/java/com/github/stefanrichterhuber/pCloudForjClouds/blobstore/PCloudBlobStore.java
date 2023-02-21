@@ -615,36 +615,44 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
         // Fetch the metadata
         final PageSet<? extends StorageMetadata> result = this.metadataStrategy
-                .list(containerName, options).thenCompose(contents -> {
+                .list(containerName, options)
+                .thenCompose(contents -> {
                     // Fetch the actual blobs
                     final CompletableFuture<PageSet<? extends StorageMetadata>> results = PCloudUtils
-                            .allOf(contents.stream().map(md -> {
-                                CompletableFuture<? extends StorageMetadata> blobMetadata = PCloudUtils
-                                        .execute(this.apiClient.loadFile(md.fileId()))
-                                        .thenApply(rf -> this.createBlobFromRemoteEntry(rf, md))
-                                        .thenApply(Blob::getMetadata)
-                                        .exceptionally(
-                                                e -> PCloudUtils.notFileFoundDefault(e,
-                                                        () -> {
-                                                            LOGGER.warn(
-                                                                    "Found metadata for blob that does not exist anymore: {}/{}",
-                                                                    md.container(), md.key());
-                                                            // Remove old metadata
-                                                            this.metadataStrategy.delete(md.container(), md.key())
-                                                                    .exceptionally(x -> null)
-                                                                    .join();
-                                                            return null;
-                                                        }));
-                                return blobMetadata;
-                            }).collect(Collectors.toList()))
+                            .allOf(contents.stream().map(this::loadStorageMetadata).collect(Collectors.toList()))
                             .thenApply(sm -> sm.stream().filter(e -> e != null)
                                     .collect(Collectors.toCollection(TreeSet::new)))
                             .thenApply(sm -> new PageSetImpl<StorageMetadata>(sm, contents.getNextMarker()));
                     return results;
                 }).join();
-
         return result;
 
+    }
+
+    /**
+     * Load the storage metadata for the given {@link ExternalBlobMetadata}.
+     * 
+     * @param md {@link ExternalBlobMetadata} to load file for
+     * @return {@link StorageMetadata} found (or null)
+     */
+    private CompletableFuture<? extends StorageMetadata> loadStorageMetadata(ExternalBlobMetadata md) {
+        final CompletableFuture<? extends StorageMetadata> storageMetadata = PCloudUtils
+                .execute(this.apiClient.loadFile(md.fileId()))
+                .thenApply(rf -> this.createBlobFromRemoteEntry(rf, md))
+                .thenApply(Blob::getMetadata)
+                .exceptionally(
+                        e -> PCloudUtils.notFileFoundDefault(e,
+                                () -> {
+                                    LOGGER.warn(
+                                            "Found metadata for blob that does not exist anymore: {}/{}",
+                                            md.container(), md.key());
+                                    // Remove old metadata
+                                    this.metadataStrategy.delete(md.container(), md.key())
+                                            .exceptionally(x -> null)
+                                            .join();
+                                    return null;
+                                }));
+        return storageMetadata;
     }
 
     @Override
