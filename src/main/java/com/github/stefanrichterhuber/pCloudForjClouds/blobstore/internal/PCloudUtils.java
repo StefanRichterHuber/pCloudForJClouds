@@ -6,10 +6,12 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -88,32 +90,45 @@ public class PCloudUtils {
 
     /**
      * Converts a
-     * {@link Collection} of {@link CompletableFuture}s to a
+     * {@link Collection} of {@link CompletionStage}s to a
      * {@link CompletableFuture} of a {@link Collection} using
      * {@link CompletableFuture#allOf(CompletableFuture...)}
      * 
      * @param <T>
-     * @param jobs {@link Collection} of {@link CompletableFuture}s to convert
-     * @return
+     * @param jobs              {@link Collection} of {@link CompletionStage}s to
+     *                          convert
+     * @param collectionFactory Factory for the collection to create
+     * @return {@link CompletableFuture} of the collection created. Collection never
+     *         null.
      */
-    public static <T, C extends Collection<T>> CompletableFuture<C> allOf(final Collection<CompletableFuture<T>> jobs,
+    public static <T, C extends Collection<T>> CompletableFuture<C> allOf(
+            final Collection<? extends CompletionStage<T>> jobs,
             final Supplier<C> collectionFactory) {
-        return CompletableFuture.allOf(jobs.toArray(new CompletableFuture[jobs.size()]))
-                .thenApply(v -> jobs.stream().map(CompletableFuture::join)
+        if (jobs == null || jobs.isEmpty()) {
+            return CompletableFuture.completedFuture(collectionFactory.get());
+        }
+
+        final CompletableFuture<T>[] jobArray = jobs.stream().map(CompletionStage::toCompletableFuture)
+                .toArray(CompletableFuture[]::new);
+
+        return CompletableFuture.allOf(jobArray)
+                .thenApply(v -> Arrays.asList(jobArray).stream().map(CompletableFuture::join)
                         .collect(Collectors.toCollection(collectionFactory)));
     }
 
     /**
      * Converts a
-     * {@link Collection} of {@link CompletableFuture}s to a
+     * {@link Collection} of {@link CompletionStage}s to a
      * {@link CompletableFuture} of a {@link List} using
      * {@link CompletableFuture#allOf(CompletableFuture...)}
      * 
      * @param <T>
-     * @param jobs {@link Collection} of {@link CompletableFuture}s to convert
-     * @return
+     * @param jobs {@link Collection} of {@link CompletionStage}s to convert
+     * @return {@link CompletableFuture} of the collection created. Collection never
+     *         null.
+     * 
      */
-    public static <T> CompletableFuture<List<T>> allOf(final Collection<CompletableFuture<T>> jobs) {
+    public static <T> CompletableFuture<List<T>> allOf(final Collection<? extends CompletionStage<T>> jobs) {
         return allOf(jobs, ArrayList::new);
     }
 
@@ -130,7 +145,6 @@ public class PCloudUtils {
     public static <T> CompletableFuture<Void> join(final Collection<CompletableFuture<?>> jobs) {
         return CompletableFuture.allOf(jobs.toArray(new CompletableFuture[jobs.size()]));
     }
-
 
     /**
      * Utility function to execute a {okhttp3.Call} async and wrap its results into

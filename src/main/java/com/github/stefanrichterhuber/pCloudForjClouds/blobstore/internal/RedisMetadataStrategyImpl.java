@@ -471,10 +471,9 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                                 }))
                                 .exceptionallyCompose(
                                         e -> lock.unlockAsync(threadId)
-                                                .thenCompose(v -> CompletableFuture.failedStage(e)))
-                                .toCompletableFuture();
+                                                .thenCompose(v -> CompletableFuture.failedStage(e)));
                     }
-                });
+                }).toCompletableFuture();
 
     }
 
@@ -876,8 +875,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                                 : keys.last();
 
                         return PCloudUtils.allOf(keys.stream()
-                                .map(k -> cache.getAsync(k).thenApply(v -> ExternalBlobMetadata.fromJSON(v))
-                                        .toCompletableFuture())
+                                .map(k -> cache.getAsync(k).thenApply(ExternalBlobMetadata::fromJSON))
                                 .collect(Collectors.toList()))
                                 .thenApply(l -> {
                                     var r = l.stream().filter(e -> e != null).peek(e -> {
@@ -931,6 +929,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param entry        {@link RemoteEntry} to generate the metadata for.
      * @return {@link ExternalBlobMetadata} generated and stored in cache.
      */
+    @Override
     public CompletableFuture<ExternalBlobMetadata> restoreMetadata(@Nonnull String container, @Nullable String key,
             @Nonnull BlobAccess blobAccess,
             @Nonnull Map<String, String> usermetadata,
