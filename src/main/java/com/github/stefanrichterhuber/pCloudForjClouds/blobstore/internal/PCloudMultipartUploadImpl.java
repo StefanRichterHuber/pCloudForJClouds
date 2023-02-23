@@ -79,9 +79,9 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
      * @param putOptions    {@link PutOptions} of the upload
      * @return {@link PCloudMultipartUpload}
      */
-    public PCloudMultipartUploadImpl(ApiClient apiClient, MetadataStrategy metadataStrategy, PCloudFileOps fileOps,
-            long folderId, @Nonnull String containerName,
-            String blobName, String id, BlobMetadata blobMetadata, PutOptions putOptions) {
+    public PCloudMultipartUploadImpl(final ApiClient apiClient, final MetadataStrategy metadataStrategy, final PCloudFileOps fileOps,
+            final long folderId, @Nonnull final String containerName,
+            final String blobName, final String id, final BlobMetadata blobMetadata, final PutOptions putOptions) {
         super(containerName, folderId, blobName, id, blobMetadata, putOptions);
         this.fileOps = fileOps;
         this.apiClient = apiClient;
@@ -112,22 +112,22 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
      * @return Copied payload.
      * @throws IOException
      */
-    private static Payload copy(Payload payload) throws IOException {
+    private static Payload copy(final Payload payload) throws IOException {
         final byte[] content = new byte[payload.getContentMetadata().getContentLength().intValue()];
         try {
-            MessageDigest md5MD = MessageDigest.getInstance("MD5");
+            final MessageDigest md5MD = MessageDigest.getInstance("MD5");
             try (InputStream is = new DigestInputStream(new BufferedInputStream(payload.openStream()), md5MD)) {
                 IOUtils.read(is, content);
             }
             final ByteArrayPayload byteArrayPayload = new ByteArrayPayload(content, md5MD.digest());
             return byteArrayPayload;
-        } catch (NoSuchAlgorithmException e) {
+        } catch (final NoSuchAlgorithmException e) {
             throw new RuntimeException(e);
         }
     }
 
     @Override
-    public CompletableFuture<MultipartPart> append(int partNumber, Payload payload) throws IOException {
+    public CompletableFuture<MultipartPart> append(final int partNumber, final Payload payload) throws IOException {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 LOGGER.debug("Received part {} for multipart upload {}", partNumber, id());
@@ -143,7 +143,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                         // Then check if this part is next in the queue
                         if (partNumber == currentPartId.get() + 1) {
                             currentPartId.incrementAndGet();
-                            MessageDigest md5MD = MessageDigest.getInstance("MD5");
+                            final MessageDigest md5MD = MessageDigest.getInstance("MD5");
                             // We need to additionally calculate the checksum of only the part to transmit
                             try (InputStream src = new DigestInputStream(hashBuilder.wrap(payload.openStream()),
                                     md5MD)) {
@@ -155,7 +155,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                         }
                         // Are there any next parts waiting in the queue to be written?
                         this.writeQueue(bos);
-                    } catch (NoSuchAlgorithmException e) {
+                    } catch (final NoSuchAlgorithmException e) {
                         throw new RuntimeException(e);
                     } finally {
                         writeLock.unlock();
@@ -175,7 +175,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                         md5 != null ? base16().lowerCase().encode(md5) : PART_ETAG, null);
                 this.parts.add(multipartPart);
                 return multipartPart;
-            } catch (IOException e) {
+            } catch (final IOException e) {
                 throw new RuntimeException(e);
             }
         });
@@ -187,9 +187,9 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
      * @param target
      * @throws IOException
      */
-    private void writeQueue(OutputStream target) throws IOException {
+    private void writeQueue(final OutputStream target) throws IOException {
         while (!queue.isEmpty() && queue.peek().getPartNumber() == currentPartId.get() + 1) {
-            QueueEntry next = queue.poll();
+            final QueueEntry next = queue.poll();
             if (next != null && next.getPartNumber() == currentPartId.get() + 1) {
                 currentPartId.incrementAndGet();
                 try (InputStream src = hashBuilder.wrap(next.getPayload().openStream())) {
@@ -213,7 +213,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
             if (!queue.isEmpty()) {
                 // check if we get exclusive access to the file
                 try (PCloudFileDescriptor fd = fileOps.open(temporaryFileId, Flag.APPEND);) {
-                    OutputStream target = new BufferedOutputStream(fd.openStream(), BUFFER_SIZE);
+                    final OutputStream target = new BufferedOutputStream(fd.openStream(), BUFFER_SIZE);
                     writeQueue(target);
                 } finally {
                     writeLock.unlock();
@@ -234,7 +234,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                 }
             }
 
-        } catch (IOException e) {
+        } catch (final IOException e) {
             throw new RuntimeException(e);
         }
 
@@ -245,7 +245,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
         // First ensure the queue is written
         try {
             writeQueue();
-        } catch (IOException e) {
+        } catch (final IOException e) {
             throw new RuntimeException(e);
         }
 

@@ -76,7 +76,6 @@ import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.RemoteF
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudBlobKeyValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudContainerNameValidator;
 import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
-import com.google.common.base.Function;
 import com.google.common.base.Optional;
 import com.google.common.base.Predicates;
 import com.google.common.base.Supplier;
@@ -134,15 +133,15 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
     @Inject
     protected PCloudBlobStore( //
-            BlobStoreContext context, Provider<BlobBuilder> blobBuilders, //
-            @Named(PCloudConstants.PROPERTY_BASEDIR) String baseDir, //
-            ApiClient apiClient, //
-            PCloudContainerNameValidator pCloudContainerNameValidator, //
-            PCloudBlobKeyValidator pCloudBlobKeyValidator, //
-            MetadataStrategy metadataStrategy, //
-            @Memoized Supplier<Set<? extends Location>> locations, //
-            MultipartUploadFactory multipartUploadFactory, //
-            Supplier<Location> defaultLocation //
+            final BlobStoreContext context, final Provider<BlobBuilder> blobBuilders, //
+            @Named(PCloudConstants.PROPERTY_BASEDIR) final String baseDir, //
+            final ApiClient apiClient, //
+            final PCloudContainerNameValidator pCloudContainerNameValidator, //
+            final PCloudBlobKeyValidator pCloudBlobKeyValidator, //
+            final MetadataStrategy metadataStrategy, //
+            @Memoized final Supplier<Set<? extends Location>> locations, //
+            final MultipartUploadFactory multipartUploadFactory, //
+            final Supplier<Location> defaultLocation //
     ) {
         this.locations = checkNotNull(locations, "locations");
         this.context = checkNotNull(context, "context");
@@ -177,7 +176,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param content Path parts
      * @return Path
      */
-    private String createPath(String... content) {
+    private String createPath(final String... content) {
         if (content != null && content.length > 0) {
             return this.baseDirectory + SEPARATOR
                     + Arrays.asList(content).stream().collect(Collectors.joining(SEPARATOR));
@@ -208,7 +207,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param container Name of the container
      * 
      */
-    private void assertContainerExists(String container) {
+    private void assertContainerExists(final String container) {
         this.pCloudContainerNameValidator.validate(container);
         if (!this.containerExists(container)) {
             LOGGER.warn("Container {} does not exist", container);
@@ -223,7 +222,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param container Name of the container
      * @param name      Name of the blob
      */
-    private void assertBlobExists(String container, String name) {
+    private void assertBlobExists(final String container, final String name) {
         this.pCloudContainerNameValidator.validate(container);
         this.pCloudBlobKeyValidator.validate(name);
         if (!this.blobExists(container, name)) {
@@ -238,7 +237,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param dir Directory to create
      * @return ID of the parent folder for the key
      */
-    private CompletableFuture<Long> assureParentFolder(@Nonnull String container, @Nullable String targetKey) {
+    private CompletableFuture<Long> assureParentFolder(@Nonnull final String container, @Nullable String targetKey) {
         targetKey = stripDirectorySuffix(targetKey);
         if (targetKey != null && targetKey.contains(SEPARATOR)) {
             final String key = getFolderOfKey(targetKey);
@@ -249,7 +248,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                         .thenCompose(parentFolderId -> PCloudUtils
                                 .execute(this.getApiClient().createFolder(parentFolderId, name)))
                         .thenApply(rf -> {
-                            ExternalBlobMetadata md = new ExternalBlobMetadata(container, key, rf.folderId(),
+                            final ExternalBlobMetadata md = new ExternalBlobMetadata(container, key, rf.folderId(),
                                     StorageType.FOLDER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
                             return md;
                         });
@@ -266,9 +265,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blob key
      * @return
      */
-    private static String getDirectoryBlobSuffix(@Nullable String key) {
+    private static String getDirectoryBlobSuffix(@Nullable final String key) {
         if (key != null) {
-            for (String suffix : BlobStoreConstants.DIRECTORY_SUFFIXES) {
+            for (final String suffix : BlobStoreConstants.DIRECTORY_SUFFIXES) {
                 if (key.endsWith(suffix)) {
                     return suffix;
                 }
@@ -283,8 +282,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blob key
      * @return
      */
-    public static String stripDirectorySuffix(@Nullable String key) {
-        String suffix = getDirectoryBlobSuffix(key);
+    public static String stripDirectorySuffix(@Nullable final String key) {
+        final String suffix = getDirectoryBlobSuffix(key);
         if (key != null && suffix != null) {
             return key.substring(0, key.lastIndexOf(suffix));
         }
@@ -298,7 +297,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blob key
      * @return pure file name
      */
-    public static String getFileOfKey(String key) {
+    public static String getFileOfKey(final String key) {
 
         /*
          * First strip directory suffix
@@ -322,7 +321,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param key Blobname
      * @return Parent folder name
      */
-    private static String getFolderOfKey(String key) {
+    private static String getFolderOfKey(final String key) {
         String folder = getDirectoryBlobSuffix(key) != null ? stripDirectorySuffix(key) : key;
         folder = folder.replace("\\", SEPARATOR);
         if (folder.contains(SEPARATOR)) {
@@ -339,7 +338,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @return {@link DataSource}.
      * @throws IOException
      */
-    private static HashingBlobDataSource dataSourceFromBlob(Blob blob) throws IOException {
+    private static HashingBlobDataSource dataSourceFromBlob(final Blob blob) throws IOException {
         if (blob.getMetadata().getSize() != null && blob.getMetadata().getSize().longValue() != blob.getPayload()
                 .getContentMetadata().getContentLength().longValue()) {
             LOGGER.warn("Size ({} bytes) of blob does not equal content length ({} bytes): {}",
@@ -355,12 +354,12 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param container Container to get metadata for
      * @return {@link StorageMetadata} found.
      */
-    private CompletableFuture<StorageMetadata> getContainerMetadata(@Nonnull String container) {
+    private CompletableFuture<StorageMetadata> getContainerMetadata(@Nonnull final String container) {
         this.pCloudContainerNameValidator.validate(container);
         return this.metadataStrategy.get(container, null)
                 .thenCompose(md -> PCloudUtils.execute(this.getApiClient().loadFolder(md.fileId())))
                 .thenApply(remoteFolder -> {
-                    MutableStorageMetadata metadata = new MutableStorageMetadataImpl();
+                    final MutableStorageMetadata metadata = new MutableStorageMetadataImpl();
                     metadata.setName(container);
                     metadata.setType(StorageType.CONTAINER);
                     metadata.setLocation(defaultLocation.get());
@@ -382,7 +381,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @return Etag of the blob (contains a default value)
      * @throws IOException
      */
-    private String putDirectoryBlob(@Nonnull String containerName, @Nonnull Blob blob, @Nullable PutOptions options)
+    private String putDirectoryBlob(@Nonnull final String containerName, @Nonnull final Blob blob, @Nullable final PutOptions options)
             throws IOException {
         if (options == null) {
             return putDirectoryBlob(containerName, blob, PutOptions.NONE);
@@ -429,8 +428,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param code
      * @return
      */
-    private static HttpResponseException returnResponseException(int code) {
-        HttpResponse response = HttpResponse.builder().statusCode(code).build();
+    private static HttpResponseException returnResponseException(final int code) {
+        final HttpResponse response = HttpResponse.builder().statusCode(code).build();
         return new HttpResponseException(
                 new HttpCommand(HttpRequest.builder().method("GET").endpoint("http://stub").build()), response);
     }
@@ -442,8 +441,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param metadata   Externalized blob metadata
      * @return {@link Blob} created
      */
-    private Blob createBlobFromRemoteEntry(RemoteEntry remoteFile,
-            ExternalBlobMetadata metadata) {
+    private Blob createBlobFromRemoteEntry(final RemoteEntry remoteFile,
+            final ExternalBlobMetadata metadata) {
         return createBlobFromRemoteEntry(metadata.container(), metadata.key(), remoteFile,
                 metadata.hashes() != null ? metadata.hashes().md5() : null,
                 metadata.customMetadata());
@@ -457,8 +456,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param metadata   Externalized blob metadata
      * @return {@link Blob} created
      */
-    private Blob createBlobFromRemoteEntry(String container, String key, RemoteEntry remoteFile,
-            ExternalBlobMetadata metadata) {
+    private Blob createBlobFromRemoteEntry(final String container, final String key, final RemoteEntry remoteFile,
+            final ExternalBlobMetadata metadata) {
         return createBlobFromRemoteEntry(container, key, remoteFile,
                 metadata.hashes() != null ? metadata.hashes().md5() : null,
                 metadata.customMetadata());
@@ -473,12 +472,11 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param userMetadata Custom user metadata for the blob.
      * @return {@link Blob} created
      */
-    private Blob createBlobFromRemoteEntry(String container, String key, RemoteEntry remoteFile, String md5,
-            Map<String, String> userMetadata) {
+    private Blob createBlobFromRemoteEntry(final String container, final String key, final RemoteEntry remoteFile, final String md5,
+            final Map<String, String> userMetadata) {
         Blob blob = null;
 
-        if (remoteFile instanceof RemoteFile && remoteFile.isFile()) {
-            final RemoteFile file = (RemoteFile) remoteFile;
+        if (remoteFile instanceof final RemoteFile file && remoteFile.isFile()) {
             final Payload payload = file.size() == 0 ? new EmptyPayload() : new RemoteFilePayload(file);
             blob = this.blobBuilders.get() //
                     .payload(payload) //
@@ -519,7 +517,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public BlobBuilder blobBuilder(String name) {
+    public BlobBuilder blobBuilder(final String name) {
         return this.blobBuilders.get().name(name);
     }
 
@@ -532,30 +530,25 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     public PageSet<? extends StorageMetadata> list() {
         LOGGER.info("Requested storage metadata for all containers");
 
-        ArrayList<String> containers = new ArrayList<String>(getAllContainerNames());
+        final ArrayList<String> containers = new ArrayList<String>(getAllContainerNames());
         Collections.sort(containers);
 
         return new PageSetImpl<StorageMetadata>(
-                FluentIterable.from(containers).transform(new Function<String, StorageMetadata>() {
-                    @Override
-                    public StorageMetadata apply(String name) {
-                        return getContainerMetadata(name).join();
-                    }
-                }).filter(Predicates.<StorageMetadata>notNull()), null);
+                FluentIterable.from(containers).transform(name -> getContainerMetadata(name).join()).filter(Predicates.<StorageMetadata>notNull()), null);
     }
 
     @Override
-    public boolean containerExists(String container) {
+    public boolean containerExists(final String container) {
         this.pCloudContainerNameValidator.validate(container);
-        ExternalBlobMetadata containerMetadata = this.metadataStrategy.get(container, null).join();
+        final ExternalBlobMetadata containerMetadata = this.metadataStrategy.get(container, null).join();
 
-        boolean result = containerMetadata != null;
+        final boolean result = containerMetadata != null;
         LOGGER.debug("Does container {} exists -> {}", container, result);
         return result;
     }
 
     @Override
-    public boolean createContainerInLocation(Location location, String container) {
+    public boolean createContainerInLocation(final Location location, final String container) {
         LOGGER.info("Create container {} in location {}", container, location);
 
         this.pCloudContainerNameValidator.validate(container);
@@ -570,12 +563,12 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public boolean createContainerInLocation(Location location, String container, CreateContainerOptions options) {
+    public boolean createContainerInLocation(final Location location, final String container, final CreateContainerOptions options) {
         return createContainerInLocation(location, container);
     }
 
     @Override
-    public ContainerAccess getContainerAccess(String container) {
+    public ContainerAccess getContainerAccess(final String container) {
         this.pCloudContainerNameValidator.validate(container);
         final ExternalBlobMetadata blobMetadata = this.metadataStrategy.get(container, null).join();
         return blobMetadata != null
@@ -584,7 +577,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public void setContainerAccess(String container, ContainerAccess access) {
+    public void setContainerAccess(final String container, final ContainerAccess access) {
         this.pCloudContainerNameValidator.validate(container);
 
         final ExternalBlobMetadata old = this.metadataStrategy.get(container, null).join();
@@ -597,7 +590,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 nxt = BlobAccess.PRIVATE;
             }
             if (nxt != null) {
-                ExternalBlobMetadata nw = new ExternalBlobMetadata(old.container(), old.key(), old.fileId(),
+                final ExternalBlobMetadata nw = new ExternalBlobMetadata(old.container(), old.key(), old.fileId(),
                         old.storageType(), nxt, old.hashes(), old.customMetadata());
                 metadataStrategy.put(container, null, nw).join();
             }
@@ -606,7 +599,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public PageSet<? extends StorageMetadata> list(String containerName, ListContainerOptions options) {
+    public PageSet<? extends StorageMetadata> list(final String containerName, final ListContainerOptions options) {
         LOGGER.info("Requested storage metadata for container {} with options {}", containerName, options);
 
         if (options == null) {
@@ -635,7 +628,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param md {@link ExternalBlobMetadata} to load file for
      * @return {@link StorageMetadata} found (or null)
      */
-    private CompletableFuture<? extends StorageMetadata> loadStorageMetadata(ExternalBlobMetadata md) {
+    private CompletableFuture<? extends StorageMetadata> loadStorageMetadata(final ExternalBlobMetadata md) {
         final CompletableFuture<? extends StorageMetadata> storageMetadata = PCloudUtils
                 .execute(this.apiClient.loadFile(md.fileId()))
                 .thenApply(rf -> this.createBlobFromRemoteEntry(rf, md))
@@ -656,7 +649,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public void deleteContainer(String container) {
+    public void deleteContainer(final String container) {
         LOGGER.info("Delete container {}", container);
 
         assertContainerExists(container);
@@ -691,12 +684,12 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public boolean deleteContainerIfEmpty(String container) {
+    public boolean deleteContainerIfEmpty(final String container) {
         LOGGER.info("Delete container {} if empty", container);
 
         assertContainerExists(container);
         try {
-            final RemoteFolder folder = this.getApiClient().listFolder(createPath(container)).execute();
+            final RemoteFolder folder = this.getApiClient().loadFolder(createPath(container)).execute();
             folder.delete(false);
             LOGGER.debug("Successfully deleted empty container {}", container);
 
@@ -711,7 +704,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public boolean blobExists(String container, String key) {
+    public boolean blobExists(final String container, final String key) {
         LOGGER.info("Check if blob {}/{} exists", container, key);
         assertContainerExists(container);
         this.pCloudBlobKeyValidator.validate(key);
@@ -734,7 +727,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public String putBlob(String container, Blob blob, PutOptions options) {
+    public String putBlob(final String container, final Blob blob, final PutOptions options) {
         assertContainerExists(container);
         final String key = blob.getMetadata().getName();
         this.pCloudBlobKeyValidator.validate(key);
@@ -777,14 +770,14 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             this.metadataStrategy.put(container, key, md).join();
 
             return ds.getHashes().md5();
-        } catch (IOException e) {
+        } catch (final IOException e) {
             throw new PCloudBlobStoreException(e);
         }
     }
 
     @Override
-    public String copyBlob(String fromContainer, String fromName, String toContainer, String toName,
-            CopyOptions options) {
+    public String copyBlob(final String fromContainer, final String fromName, final String toContainer, final String toName,
+            final CopyOptions options) {
         assertContainerExists(fromContainer);
         assertBlobExists(fromContainer, fromName);
         if (!fromContainer.equals(toContainer)) {
@@ -807,7 +800,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
             }
             // Exceptions are thrown if etag / modifications dates do not pass
-            Blob source = this.getBlob(fromContainer, fromName, getOptions);
+            final Blob source = this.getBlob(fromContainer, fromName, getOptions);
 
             if (source != null && source.getPayload().getRawContent() instanceof RemoteFile) {
 
@@ -835,7 +828,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                         final ExternalBlobMetadata srcMetadata = this.metadataStrategy.get(fromContainer, fromName)
                                 .join();
                         if (srcMetadata != null) {
-                            ExternalBlobMetadata trgtMetadata = new ExternalBlobMetadata(toContainer, toName,
+                            final ExternalBlobMetadata trgtMetadata = new ExternalBlobMetadata(toContainer, toName,
                                     result.asFile().fileId(), StorageType.BLOB, srcMetadata.access(),
                                     srcMetadata.hashes().withBuildin(result.asFile().hash()),
                                     srcMetadata.customMetadata());
@@ -853,13 +846,13 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                         "Source not found / is not a real file during copy");
             }
 
-        } catch (ApiError e) {
+        } catch (final ApiError e) {
             if (PCloudError.isEntryNotFound(e)) {
                 throw new KeyNotFoundException(fromContainer, fromName,
                         "Source not found / is not a real file during copy");
             }
             throw new PCloudBlobStoreException(e);
-        } catch (IOException e) {
+        } catch (final IOException e) {
             throw new PCloudBlobStoreException(e);
         }
     }
@@ -873,7 +866,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param options   {@link GetOptions} to apply
      * @return {@link Blob} found or null, if blob does not exist.
      */
-    private Blob getDirectoryBlob(String container, String name, ExternalBlobMetadata metadata, GetOptions options) {
+    private Blob getDirectoryBlob(final String container, final String name, final ExternalBlobMetadata metadata, final GetOptions options) {
         LOGGER.info("Get directory blob {}/{} with options {}", container, name, options);
 
         final RemoteFolder remoteFile = PCloudUtils
@@ -883,7 +876,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public Blob getBlob(String container, String name, GetOptions options) {
+    public Blob getBlob(final String container, final String name, final GetOptions options) {
         assertContainerExists(container);
         try {
             LOGGER.info("Get blob {}/{} with options {}", container, name, options);
@@ -914,9 +907,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 }
 
                 if (options.getIfModifiedSince() != null) {
-                    Date modifiedSince = options.getIfModifiedSince();
+                    final Date modifiedSince = options.getIfModifiedSince();
                     if (remoteFile.lastModified().before(modifiedSince)) {
-                        HttpResponse response = HttpResponse.builder().statusCode(304).build();
+                        final HttpResponse response = HttpResponse.builder().statusCode(304).build();
                         throw new HttpResponseException(
                                 String.format("%1$s is before %2$s", remoteFile.lastModified(), modifiedSince), null,
                                 response);
@@ -924,9 +917,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
                 }
                 if (options.getIfUnmodifiedSince() != null) {
-                    Date unmodifiedSince = options.getIfUnmodifiedSince();
+                    final Date unmodifiedSince = options.getIfUnmodifiedSince();
                     if (remoteFile.lastModified().after(unmodifiedSince)) {
-                        HttpResponse response = HttpResponse.builder().statusCode(412).build();
+                        final HttpResponse response = HttpResponse.builder().statusCode(412).build();
                         throw new HttpResponseException(
                                 String.format("%1$s is after %2$s", remoteFile.lastModified(), unmodifiedSince), null,
                                 response);
@@ -940,7 +933,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                     final ByteSource byteSource = ByteSource
                             .wrap(ByteStreams2.toByteArrayAndClose(remoteFile.byteStream()));
 
-                    for (String s : options.getRanges()) {
+                    for (final String s : options.getRanges()) {
                         // HTTP uses a closed interval while Java array indexing uses a
                         // half-open interval.
                         long offset = 0;
@@ -953,7 +946,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                         } else if (s.endsWith("-")) {
                             offset = Long.parseLong(s.substring(0, s.length() - 1));
                         } else if (s.contains("-")) {
-                            String[] firstLast = s.split("\\-");
+                            final String[] firstLast = s.split("\\-");
                             offset = Long.parseLong(firstLast[0]);
                             last = Long.parseLong(firstLast[1]);
                         } else {
@@ -973,7 +966,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                         blob.getAllHeaders().put(HttpHeaders.CONTENT_RANGE, "bytes " + offset + "-" + last + "/"
                                 + blob.getPayload().getContentMetadata().getContentLength());
                     }
-                    ContentMetadata cmd = blob.getPayload().getContentMetadata();
+                    final ContentMetadata cmd = blob.getPayload().getContentMetadata();
                     blob.setPayload(ByteSource.concat(streams.build()).openStream());
                     HttpUtils.copy(cmd, blob.getPayload().getContentMetadata());
                     blob.getPayload().getContentMetadata().setContentLength(size);
@@ -981,7 +974,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 }
             }
             return blob;
-        } catch (Exception e) {
+        } catch (final Exception e) {
             return PCloudUtils.notFileFoundDefault(e, () -> null, PCloudBlobStoreException::new);
         }
     }
@@ -993,7 +986,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param name      Name of the blob
      * @return Success of the operation
      */
-    private CompletableFuture<Boolean> removeBlobWithMetadata(String container, String name) {
+    private CompletableFuture<Boolean> removeBlobWithMetadata(final String container, final String name) {
         final CompletableFuture<Boolean> deleteJob = this.metadataStrategy.get(container, name)
                 .thenCompose(md -> {
                     if (md == null) {
@@ -1042,28 +1035,28 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public void removeBlob(String container, String name) {
+    public void removeBlob(final String container, final String name) {
         LOGGER.info("Remove blob {}/{}", container, name);
 
         this.pCloudContainerNameValidator.validate(container);
-        boolean result = this.removeBlobWithMetadata(container, name).join();
+        final boolean result = this.removeBlobWithMetadata(container, name).join();
         if (!result) {
             LOGGER.warn("Failed to delete {}{}{}", container, SEPARATOR, name);
         }
     }
 
     @Override
-    public void removeBlobs(String container, Iterable<String> names) {
+    public void removeBlobs(final String container, final Iterable<String> names) {
         LOGGER.info("Remove blobs {} in container {}", names, container);
 
         assertContainerExists(container);
         if (names != null) {
             // Start all remove jobs in parallel
             final Map<String, CompletableFuture<Boolean>> jobs = new HashMap<>();
-            for (String name : names) {
+            for (final String name : names) {
                 jobs.put(name, this.removeBlobWithMetadata(container, name));
             }
-            for (Entry<String, CompletableFuture<Boolean>> entry : jobs.entrySet()) {
+            for (final Entry<String, CompletableFuture<Boolean>> entry : jobs.entrySet()) {
                 if (entry.getValue().join()) {
                     LOGGER.debug("Successfully deleted {}{}{}", container, entry.getKey());
                 } else {
@@ -1074,18 +1067,18 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public BlobAccess getBlobAccess(String container, String name) {
+    public BlobAccess getBlobAccess(final String container, final String name) {
 
         assertContainerExists(container);
         final Optional<ExternalBlobMetadata> readMetadata = Optional
                 .fromNullable(this.metadataStrategy.get(container, name).join());
-        BlobAccess blobAccess = readMetadata.transform(ExternalBlobMetadata::access).or(BlobAccess.PRIVATE);
+        final BlobAccess blobAccess = readMetadata.transform(ExternalBlobMetadata::access).or(BlobAccess.PRIVATE);
         LOGGER.info("Get blob access {}/{} ->  {}", container, name, blobAccess);
         return blobAccess;
     }
 
     @Override
-    public void setBlobAccess(String container, String name, BlobAccess access) {
+    public void setBlobAccess(final String container, final String name, final BlobAccess access) {
         LOGGER.info("Set blob access {}/{} to {}", container, name, access);
 
         assertContainerExists(container);
@@ -1109,7 +1102,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param mpu
      * @return
      */
-    private PCloudMultipartUpload resolveUpload(MultipartUpload mpu) {
+    private PCloudMultipartUpload resolveUpload(final MultipartUpload mpu) {
         if (mpu instanceof PCloudMultipartUpload) {
             return (PCloudMultipartUpload) mpu;
         } else {
@@ -1123,7 +1116,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public MultipartUpload initiateMultipartUpload(String container, BlobMetadata blobMetadata, PutOptions options) {
+    public MultipartUpload initiateMultipartUpload(final String container, final BlobMetadata blobMetadata, final PutOptions options) {
 
         assertContainerExists(container);
         final String uploadId = UUID.randomUUID().toString();
@@ -1136,7 +1129,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
         // Check if parent folder exists
         final long folderId = assureParentFolder(container, blobMetadata.getName()).join();
-        PCloudMultipartUpload upload = this.multipartUploadFactory.create(folderId, container, name,
+        final PCloudMultipartUpload upload = this.multipartUploadFactory.create(folderId, container, name,
                 uploadId, blobMetadata, options);
         upload.start();
         this.currentMultipartUploads.put(uploadId, upload);
@@ -1144,14 +1137,14 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public void abortMultipartUpload(MultipartUpload mpu) {
+    public void abortMultipartUpload(final MultipartUpload mpu) {
         LOGGER.info("Abort multipart upload with id {}", mpu.id());
         resolveUpload(mpu).abort();
         this.currentMultipartUploads.remove(mpu.id());
     }
 
     @Override
-    public String completeMultipartUpload(MultipartUpload mpu, List<MultipartPart> parts) {
+    public String completeMultipartUpload(final MultipartUpload mpu, final List<MultipartPart> parts) {
         LOGGER.info("Complete multipart upload with id {} and parts {}", mpu.id(), parts);
         final String etag = resolveUpload(mpu).complete().join();
         this.currentMultipartUploads.remove(mpu.id());
@@ -1159,24 +1152,24 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public MultipartPart uploadMultipartPart(MultipartUpload mpu, int partNumber, Payload payload) {
+    public MultipartPart uploadMultipartPart(final MultipartUpload mpu, final int partNumber, final Payload payload) {
         LOGGER.info("Upload part {} to multipart upload with id {}", partNumber, mpu.id());
         try {
             return resolveUpload(mpu).append(partNumber, payload).join();
-        } catch (IOException e) {
+        } catch (final IOException e) {
             throw new RuntimeException(e);
         }
     }
 
     @Override
-    public List<MultipartPart> listMultipartUpload(MultipartUpload mpu) {
-        List<MultipartPart> parts = resolveUpload(mpu).getParts();
+    public List<MultipartPart> listMultipartUpload(final MultipartUpload mpu) {
+        final List<MultipartPart> parts = resolveUpload(mpu).getParts();
         LOGGER.info("List parts of multipart upload with id {} -> {}", mpu.id(), parts);
         return parts;
     }
 
     @Override
-    public List<MultipartUpload> listMultipartUploads(String container) {
+    public List<MultipartUpload> listMultipartUploads(final String container) {
 
         final List<MultipartUpload> result = new ArrayList<>(this.currentMultipartUploads.values().stream()
                 .filter(v -> v.containerName().equals(container)).collect(Collectors.toList()));

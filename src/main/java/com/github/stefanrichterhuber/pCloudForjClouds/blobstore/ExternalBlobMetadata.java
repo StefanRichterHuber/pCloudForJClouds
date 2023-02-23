@@ -30,14 +30,6 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     private static final Gson gson = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().create();
 
     /**
-     * Empty metadata
-     */
-    public static final ExternalBlobMetadata EMPTY_METADATA = new ExternalBlobMetadata(null, null, 0, null,
-            BlobAccess.PRIVATE,
-            BlobHashes.empty(),
-            Collections.emptyMap());
-
-    /**
      * Different hashes of the target file
      */
     @Expose
