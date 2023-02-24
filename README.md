@@ -90,6 +90,7 @@ services:
 | Redis connnect string |  `redis://redis:6379` | `-r`, `--redis` | `JCLOUDS_PCLOUD_REDIS` |
 | Interval (in min) to synchronize redis metadata cache with metadata files at pCloud. Negative values mean no sync (not recommended), 0 means only one sync at startup. Depending on the number of files stored, this can be a very expensive operation. Therefore sync is done incrementally, so only the files changed / added / deleted since the last sync are loaded. It is recommended to use a persistent cache to reduce the load of loading metadata into the cache.  | `0` | - | `JCLOUDS_PCLOUD_USERMETADATA_SYNCHRONIZE_INTERVAL` |
 | **Expert-only:** Interval (in min) to check for orphaned metadata entries. Sometimes, when testing or when manually deleting files in the S3 data folder, the corresponding metadata files remain and need to be removed. A negative value  means no scan for orphaned metadata, a value of `0` means the scan is just done once, 5 minutes after start. Depending on the number of files stored, this can be a very expensive operation! | `-1` | - | `JCLOUDS_PCLOUD_USERMETADATA_SANITIZE_INTERVAL` |
+| Verbose logging output. Either with repeatable flag `-v` (e.g. `-v`, `-vv`, `-vvv`) or by setting explicit environment variable (possible values `ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`) | `ERROR` | `--verbose`, `-v`, `-vv`, `-vvv` | `JCLOUDS_PCLOUD_VERBOSITY` |
 
 ## Limitations
 

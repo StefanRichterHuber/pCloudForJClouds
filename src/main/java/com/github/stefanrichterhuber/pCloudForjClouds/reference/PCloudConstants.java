@@ -13,6 +13,11 @@ public class PCloudConstants {
     public static final String COMMON_PREFIX = "jclouds.pcloud.";
 
     /**
+     * Specifies the verbosity of the log output
+     */
+    public final static String PROPERTY_LOG_LEVEL = COMMON_PREFIX + "verbosity";
+
+    /**
      * Specify the base directory where provider starts its file operations - must
      * exists
      */
@@ -66,10 +71,10 @@ public class PCloudConstants {
      * @return
      */
     public static Properties fromEnv() {
-        Properties result = new Properties();
+        final Properties result = new Properties();
         // All our properties start with jclouds.pcloud. -> so search for JC
-        String envPrefix = PCloudConstants.COMMON_PREFIX.toUpperCase().replace('.', '_');
-        for (var entry : System.getenv().entrySet()) {
+        final String envPrefix = PCloudConstants.COMMON_PREFIX.toUpperCase().replace('.', '_');
+        for (final var entry : System.getenv().entrySet()) {
             if (entry.getKey().startsWith(envPrefix)) {
                 final String propertyName = entry.getKey().toLowerCase().replace('_', '.');
                 final String propertyValue = entry.getValue();
