@@ -3,7 +3,6 @@ package com.github.stefanrichterhuber.pCloudForjClouds.connection;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.Map;
-import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 
 import javax.annotation.Nonnull;
@@ -30,10 +29,7 @@ import com.pcloud.sdk.PCloudSdk;
 public class PCloudApiClientProvider implements Provider<ApiClient> {
     private final static Logger LOGGER = LoggerFactory.getLogger(PCloudApiClientProvider.class);
 
-    @Nonnull
     private final String clientSecret;
-    @Nonnull
-    private final String pCloudHost;
 
     /**
      * Cache the ApiClient for each client secret, because one should pool the
@@ -43,26 +39,19 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
 
     @Inject
     protected PCloudApiClientProvider(
-            @Named(PCloudConstants.PROPERTY_CLIENT_SECRET) String clientSecret, //
-            // @Named(Constants.PROPERTY_ENDPOINT) String pCloudHost //
-            Properties props) {
+            @Named(PCloudConstants.PROPERTY_CLIENT_SECRET) String clientSecret //
+    ) {
         this.clientSecret = checkNotNull(clientSecret, "Property " + PCloudConstants.PROPERTY_CLIENT_SECRET);
-        // pCloudHost = pCloudHost != null ? pCloudHost :
-        // PCloudUtils.testForAPIEndpoint(clientSecret).orNull();
-        // this.pCloudHost = checkNotNull(pCloudHost, "Property " +
-        // Constants.PROPERTY_ENDPOINT);
-        // this.pCloudHost = PCloudUtils.testForAPIEndpoint(clientSecret).orNull();
-        this.pCloudHost = PCloudUtils.testForAPIEndpoint(clientSecret).get();
     }
 
     /**
      * Factory for {@link ApiClient}s for a given client secret.
      * 
-     * @param pCloudHost   API Host
      * @param clientSecret client secret
      * @return {@link ApiClient}
      */
-    public static final ApiClient create(@Nonnull String pCloudHost, @Nonnull String clientSecret) {
+    public static final ApiClient create(@Nonnull String clientSecret) {
+        String pCloudHost = PCloudUtils.testForAPIEndpoint(clientSecret).get();
         final GetApiResponse apiResponse = PCloudUtils.getApiServer(pCloudHost).join();
         if (apiResponse != null && apiResponse.getResult() == 0 && apiResponse.getApi().size() > 0
                 && !pCloudHost.equals(apiResponse.getApi().get(0))) {
@@ -79,8 +68,7 @@ public class PCloudApiClientProvider implements Provider<ApiClient> {
 
     @Override
     public ApiClient get() {
-        final ApiClient result = API_CLIENTS.computeIfAbsent(this.clientSecret,
-                clientSecret -> create(pCloudHost, clientSecret));
+        final ApiClient result = API_CLIENTS.computeIfAbsent(this.clientSecret, PCloudApiClientProvider::create);
         return result;
     }
 

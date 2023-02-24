@@ -1,6 +1,7 @@
 package com.github.stefanrichterhuber.pCloudForjClouds.connection.fileops;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
@@ -120,9 +121,18 @@ public interface PCloudFileDescriptor extends AutoCloseable {
      * recommended since every write is directly forwarded to the backend! Closing
      * the Stream also closes the file descriptor!
      * 
-     * @return
+     * @return {@link OutputStream}
      */
     OutputStream openStream();
+
+    /**
+     * Creates an {@link InputStream} for this file. Buffering is heavily
+     * recommended since every read is directly forwarded to the backend! Closing
+     * the Stream also closes the file descriptor!
+     * 
+     * @return {@link InputStream}
+     */
+    InputStream inputStream();
 
     /**
      * If length is less than the file size, then the extra data is cut from the
