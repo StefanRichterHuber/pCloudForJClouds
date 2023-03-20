@@ -12,50 +12,52 @@ import com.github.stefanrichterhuber.pCloudForjClouds.reference.PCloudConstants;
 
 public class PCloudApiMetadata extends BaseApiMetadata {
 
-   @Override
-   public Builder toBuilder() {
-      return new Builder().fromApiMetadata(this);
-   }
+    @Override
+    public Builder toBuilder() {
+        return new Builder().fromApiMetadata(this);
+    }
 
-   public PCloudApiMetadata() {
-      super(new Builder());
-   }
+    public PCloudApiMetadata() {
+        super(new Builder());
+    }
 
-   protected PCloudApiMetadata(Builder builder) {
-      super(builder);
-   }
+    protected PCloudApiMetadata(Builder builder) {
+        super(builder);
+    }
 
-   @Override
-   public Properties getDefaultProperties() {
-      Properties properties = BaseHttpApiMetadata.defaultProperties();
-      properties.put(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE, true);
-      properties.put(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "blobstore-metadata");
-      return properties;
-   }
+    @Override
+    public Properties getDefaultProperties() {
+        Properties properties = BaseHttpApiMetadata.defaultProperties();
+        properties.put(PCloudConstants.PROPERTY_USERMETADATA_ACTIVE, true);
+        properties.put(PCloudConstants.PROPERTY_USERMETADATA_FOLDER, "/S3-metadata");
+        properties.put(PCloudConstants.PROPERTY_SANITIZE_METADATA_INTERVAL_MIN, "-1");
+        properties.put(PCloudConstants.PROPERTY_SYNCHRONIZE_METADATA_INTERVAL_MIN, "0");
+        return properties;
+    }
 
-   public static class Builder extends BaseApiMetadata.Builder<Builder> {
+    public static class Builder extends BaseApiMetadata.Builder<Builder> {
 
-      protected Builder() {
-         id("pcloud")
-         .name("PCloud-based BlobStore")
-         .identityName("Unused")
-         .defaultEndpoint("api.pcloud.com")
-         .defaultIdentity("Unused")
-         .version("1")
-         .documentation(URI.create("http://www.jclouds.org/documentation/userguide/blobstore-guide"))
-         .defaultProperties(PCloudApiMetadata.defaultProperties())
-         .view(BlobStoreContext.class)
-         .defaultModule(PCloudCustomBlobStoreContextModule.class);
-      }
+        protected Builder() {
+            id("pcloud")
+                    .name("PCloud-based BlobStore")
+                    .identityName("Unused")
+                    .defaultEndpoint("api.pcloud.com")
+                    .defaultIdentity("Unused")
+                    .version("1")
+                    .documentation(URI.create("http://www.jclouds.org/documentation/userguide/blobstore-guide"))
+                    .defaultProperties(PCloudApiMetadata.defaultProperties())
+                    .view(BlobStoreContext.class)
+                    .defaultModule(PCloudCustomBlobStoreContextModule.class);
+        }
 
-      @Override
-      public PCloudApiMetadata build() {
-         return new PCloudApiMetadata(this);
-      }
+        @Override
+        public PCloudApiMetadata build() {
+            return new PCloudApiMetadata(this);
+        }
 
-      @Override
-      protected Builder self() {
-         return this;
-      }
-   }
+        @Override
+        protected Builder self() {
+            return this;
+        }
+    }
 }

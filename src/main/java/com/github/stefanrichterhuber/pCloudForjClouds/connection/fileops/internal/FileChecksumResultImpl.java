@@ -4,29 +4,37 @@ import com.github.stefanrichterhuber.pCloudForjClouds.connection.fileops.PCloudF
 import com.google.gson.annotations.Expose;
 import com.google.gson.annotations.SerializedName;
 
-
 class FileChecksumResultImpl extends FileOpsResultImpl implements PCloudFileChecksum {
-	@Expose
-	@SerializedName("sha1")
-	private String sha1;
-	
-	@Expose
-	@SerializedName("md5")
-	private String md5;
-	
-	@Expose
-	@SerializedName("size")
-	private long size;
-	
-	public String sha1() {
-		return this.sha1;
-	}
-	
-	public String md5() {
-		return this.md5;
-	}
-	
-	public long size() {
-		return this.size;
-	}
+    @Expose
+    @SerializedName("sha1")
+    private String sha1;
+
+    @Expose
+    @SerializedName("md5")
+    private String md5;
+
+    @Expose
+    @SerializedName("sha256")
+    private String sha256;
+
+    @Expose
+    @SerializedName("size")
+    private long size;
+
+    public String sha1() {
+        return this.sha1;
+    }
+
+    public String md5() {
+        return this.md5;
+    }
+
+    public long size() {
+        return this.size;
+    }
+
+    @Override
+    public String sha256() {
+        return this.sha256;
+    }
 }

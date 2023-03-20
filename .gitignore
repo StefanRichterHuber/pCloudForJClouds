@@ -20,3 +20,4 @@ buildNumber.properties
 # https://github.com/takari/maven-wrapper#usage-without-binary-jar
 .mvn/wrapper/maven-wrapper.jar
 >>>>>>> 6b5380abbe0e923c5457b3a201e45f597746c2db
+/build.sh
