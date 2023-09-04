@@ -129,37 +129,6 @@
 					</archive>
 				</configuration>
 			</plugin>
-			<plugin>
-				<groupId>io.fabric8</groupId>
-				<artifactId>docker-maven-plugin</artifactId>
-				<version>0.40.2</version>
-				<!--
-                <executions>
-                    <execution>
-                        <id>build-and-push-docker</id>
-                        <phase>install</phase>
-                        <goals>
-                            <goal>build</goal>
-                            <goal>push</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                -->
-				<configuration>
-					<images>
-						<image>
-							<name>${project.artifactId}:${project.version}}</name>
-							<build>
-								<dockerFile>${project.basedir}/Dockerfile</dockerFile>
-								<buildOptions>
-									<pull>true</pull>
-									<noCache>true</noCache>
-								</buildOptions>
-							</build>
-						</image>
-					</images>
-				</configuration>
-			</plugin>
 		</plugins>
 	</build>
 	<dependencyManagement>
