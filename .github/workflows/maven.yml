@@ -32,4 +32,4 @@ jobs:
       with:
         push: true
         platforms: linux/amd64,linux/arm64,linux/arm/v7
-        tags: stefanrichterhuber/thermobeaconserver:latest
+        tags: stefanrichterhuber/pcloudS3proxy:latest
