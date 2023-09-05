@@ -28,5 +28,5 @@ jobs:
       uses: docker/build-push-action@v4
       with:
         push: true
-        platforms: linux/amd64,linux/arm64/v8
+        platforms: linux/amd64,linux/arm64
         tags: stefanrichterhuber/pclouds3proxy:latest
