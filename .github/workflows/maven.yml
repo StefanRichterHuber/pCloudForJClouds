@@ -1,4 +1,4 @@
-name: Docker Build
+name: Docker Image CI
 
 on:
   push:
@@ -10,11 +10,8 @@ on:
 # https://docs.docker.com/build/ci/github-actions/push-multi-registries/
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout
       uses: actions/checkout@v3
@@ -31,5 +28,5 @@ jobs:
       uses: docker/build-push-action@v4
       with:
         push: true
-        platforms: linux/amd64,linux/arm64,linux/arm/v7
+        platforms: linux/amd64,linux/arm64
         tags: stefanrichterhuber/pclouds3proxy:latest
