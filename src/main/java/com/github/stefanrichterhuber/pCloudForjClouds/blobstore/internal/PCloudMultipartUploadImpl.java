@@ -79,7 +79,8 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
      * @param putOptions    {@link PutOptions} of the upload
      * @return {@link PCloudMultipartUpload}
      */
-    public PCloudMultipartUploadImpl(final ApiClient apiClient, final MetadataStrategy metadataStrategy, final PCloudFileOps fileOps,
+    public PCloudMultipartUploadImpl(final ApiClient apiClient, final MetadataStrategy metadataStrategy,
+            final PCloudFileOps fileOps,
             final long folderId, @Nonnull final String containerName,
             final String blobName, final String id, final BlobMetadata blobMetadata, final PutOptions putOptions) {
         super(containerName, folderId, blobName, id, blobMetadata, putOptions);
@@ -151,7 +152,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                             }
                             md5 = md5MD.digest();
                             written = true;
-                            LOGGER.debug("Directly uploaded part {} for multipart upload {}", partNumber, id());
+                            LOGGER.info("Directly uploaded part {} for multipart upload {}", partNumber, id());
                         }
                         // Are there any next parts waiting in the queue to be written?
                         this.writeQueue(bos);
@@ -162,7 +163,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                     }
                 }
                 if (!written) {
-                    LOGGER.debug("Queueing received part {} for multipart upload {}", partNumber, id());
+                    LOGGER.info("Queueing received part {} for multipart upload {}", partNumber, id());
                     // We were unable to directly write the payload -> create copy of the payload
                     // and add it to the queue
                     final Payload localPayload = copy(payload);
@@ -195,7 +196,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                 try (InputStream src = hashBuilder.wrap(next.getPayload().openStream())) {
                     IOUtils.copyLarge(src, target);
                 }
-                LOGGER.debug("Uploaded queued part {} for multipart upload {}", next.getPartNumber(), id());
+                LOGGER.info("Uploaded queued part {} for multipart upload {}", next.getPartNumber(), id());
             } else if (next != null) {
                 // Add back to queue
                 queue.add(next);
@@ -257,7 +258,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
         // Then rename the target file to its final file name.
         return PCloudUtils.execute(this.apiClient.renameFile(temporaryFileId, blobName)) //
                 .thenCompose(remoteFile -> {
-                    LOGGER.debug("Renamed multipart temporary file {} to {}", temporaryFileName, blobName);
+                    LOGGER.info("Renamed multipart temporary file {} to {} within folder {} (=> {})", temporaryFileName, blobName, folderId(), this.blobMetadata.getName());
                     LOGGER.debug("Received the final checksum from the backend: {}", remoteFile.hash());
                     // Upload metadata
                     // Warning: Sometimes the build-in hash of the remotefile changes after some
@@ -265,13 +266,13 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                     final BlobHashes hashes = this.hashBuilder.toBlobHashes(remoteFile.hash());
                     final ExternalBlobMetadata externalBlobMetadata = new ExternalBlobMetadata(
                             this.containerName(),
-                            this.blobName(),
+                            this.blobMetadata.getName(),
                             remoteFile.fileId(),
                             StorageType.BLOB,
                             BlobAccess.PRIVATE,
                             hashes,
                             this.blobMetadata.getUserMetadata());
-                    return this.metadataStrategy.put(containerName, blobName, externalBlobMetadata)
+                    return this.metadataStrategy.put(containerName, this.blobMetadata.getName(), externalBlobMetadata)
                             .thenApply(v -> hashes.md5());
                 });
 
