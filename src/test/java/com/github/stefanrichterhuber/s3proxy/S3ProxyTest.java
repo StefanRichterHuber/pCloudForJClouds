@@ -183,6 +183,71 @@ public class S3ProxyTest {
     }
 
     @Test
+    public void shouldDoS3MultipartIntoSubFolder() throws Exception {
+        // Create 2 parts with 6M (must be at least 5M) of random content each - yeah
+        // its
+        // stupid, but it works... :/
+        List<byte[]> contents = new ArrayList<>();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(8 * 6_000_000);
+        for (int i = 0; i < 2; i++) {
+            byte[] content = new byte[6_000_000];
+            for (int j = 0; j < 6_000_000; j++) {
+                content[j] = (byte) (Math.random() * 255.0);
+            }
+            baos.write(content);
+            contents.add(content);
+        }
+        byte[] content = baos.toByteArray();
+
+        String bucket = UUID.randomUUID().toString();
+        String key = "testfolder/" + UUID.randomUUID().toString();
+
+        Map<String, String> md = new HashMap<>();
+        md.put("Usermetadata1", "user meta data value1");
+
+        s3Client.createBucket(bucket);
+
+        LOGGER.info("Uploading to key {} to bucket", key, bucket);
+
+        ObjectMetadata omd = new ObjectMetadata();
+        omd.setUserMetadata(md);
+        InitiateMultipartUploadResult initiateMultipartUpload = s3Client
+                .initiateMultipartUpload(new InitiateMultipartUploadRequest(bucket, key, omd) //
+                        .withObjectMetadata(omd));
+
+        List<PartETag> partEtags = new ArrayList<>();
+        for (int i = 0; i < contents.size(); i++) {
+
+            UploadPartResult part = s3Client.uploadPart(new UploadPartRequest() //
+                    .withBucketName(bucket) //
+                    .withKey("key" + i).withUploadId(initiateMultipartUpload.getUploadId()) //
+                    .withInputStream(new ByteArrayInputStream(contents.get(i))) //
+                    .withPartSize(contents.get(i).length).withPartNumber(i + 1));
+
+            partEtags.add(part.getPartETag());
+        }
+
+        s3Client.completeMultipartUpload(
+                new CompleteMultipartUploadRequest().withUploadId(initiateMultipartUpload.getUploadId())
+                        .withBucketName(bucket).withKey("final").withPartETags(partEtags));
+
+        Thread.sleep(1000);
+
+        // Download and check
+        S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));
+        try (InputStream inputStream = s3Object.getObjectContent()) {
+            byte[] resultArray = IOUtils.toByteArray(inputStream);
+            assertEquals(content.length, resultArray.length);
+            Assert.assertArrayEquals(content, resultArray);
+        }
+        assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
+
+        s3Client.deleteObject(new DeleteObjectRequest(bucket, key));
+        s3Client.deleteObject(new DeleteObjectRequest(bucket, "testfolder"));
+        s3Client.deleteBucket(bucket);
+    }
+
+    @Test
     public void shouldDoS3Multipart() throws Exception {
         // Create 8 parts with 6M (must be at least 5M) of random content each - yeah
         // its
