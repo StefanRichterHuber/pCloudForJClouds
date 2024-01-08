@@ -246,12 +246,15 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 final String name = getFileOfKey(key);
                 return this.assureParentFolder(container, key)
                         .thenCompose(parentFolderId -> PCloudUtils
-                                .execute(this.getApiClient().createFolder(parentFolderId, name)))
-                        .thenApply(rf -> {
-                            final ExternalBlobMetadata md = new ExternalBlobMetadata(container, key, rf.folderId(),
-                                    StorageType.FOLDER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
-                            return md;
-                        });
+                                .execute(this.getApiClient().createFolder(parentFolderId, name))
+                                .thenApply(rf -> {
+                                    final ExternalBlobMetadata md = new ExternalBlobMetadata(container, key,
+                                            rf.folderId(),
+                                            parentFolderId,
+                                            StorageType.FOLDER, BlobAccess.PRIVATE, BlobHashes.empty(),
+                                            Collections.emptyMap());
+                                    return md;
+                                }));
             };
             return this.metadataStrategy.getOrCreate(container, key, create).thenApply(em -> em.fileId());
         } else {
@@ -381,7 +384,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @return Etag of the blob (contains a default value)
      * @throws IOException
      */
-    private String putDirectoryBlob(@Nonnull final String containerName, @Nonnull final Blob blob, @Nullable final PutOptions options)
+    private String putDirectoryBlob(@Nonnull final String containerName, @Nonnull final Blob blob,
+            @Nullable final PutOptions options)
             throws IOException {
         if (options == null) {
             return putDirectoryBlob(containerName, blob, PutOptions.NONE);
@@ -397,6 +401,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                 // Upload metadata
                                 final ExternalBlobMetadata metadata = new ExternalBlobMetadata(containerName, blobName,
                                         folder.folderId(),
+                                        targetFolderId,
                                         StorageType.FOLDER,
                                         options.getBlobAccess(), BlobHashes.empty(),
                                         blob.getMetadata().getUserMetadata());
@@ -472,7 +477,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param userMetadata Custom user metadata for the blob.
      * @return {@link Blob} created
      */
-    private Blob createBlobFromRemoteEntry(final String container, final String key, final RemoteEntry remoteFile, final String md5,
+    private Blob createBlobFromRemoteEntry(final String container, final String key, final RemoteEntry remoteFile,
+            final String md5,
             final Map<String, String> userMetadata) {
         Blob blob = null;
 
@@ -534,7 +540,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         Collections.sort(containers);
 
         return new PageSetImpl<StorageMetadata>(
-                FluentIterable.from(containers).transform(name -> getContainerMetadata(name).join()).filter(Predicates.<StorageMetadata>notNull()), null);
+                FluentIterable.from(containers).transform(name -> getContainerMetadata(name).join())
+                        .filter(Predicates.<StorageMetadata>notNull()),
+                null);
     }
 
     @Override
@@ -552,10 +560,11 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         LOGGER.info("Create container {} in location {}", container, location);
 
         this.pCloudContainerNameValidator.validate(container);
-        return PCloudUtils.execute(this.getApiClient().createFolder(createPath(container)))
+        return PCloudUtils.execute(this.getApiClient().createFolder(baseFolderId, container))
                 .thenCompose(remoteFolder -> {
                     final ExternalBlobMetadata blobMetadata = new ExternalBlobMetadata(container, null,
                             remoteFolder.folderId(),
+                            baseFolderId,
                             StorageType.CONTAINER, BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap());
                     return this.metadataStrategy.put(container, null, blobMetadata)
                             .thenApply(v -> remoteFolder.isFolder());
@@ -563,7 +572,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public boolean createContainerInLocation(final Location location, final String container, final CreateContainerOptions options) {
+    public boolean createContainerInLocation(final Location location, final String container,
+            final CreateContainerOptions options) {
         return createContainerInLocation(location, container);
     }
 
@@ -591,6 +601,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             }
             if (nxt != null) {
                 final ExternalBlobMetadata nw = new ExternalBlobMetadata(old.container(), old.key(), old.fileId(),
+                        old.folderId(),
                         old.storageType(), nxt, old.hashes(), old.customMetadata());
                 metadataStrategy.put(container, null, nw).join();
             }
@@ -612,7 +623,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 .thenCompose(contents -> {
                     // Fetch the actual blobs
                     final CompletableFuture<PageSet<? extends StorageMetadata>> results = PCloudUtils
-                            .allOf(contents.stream().map(md -> loadStorageMetadata(md).thenApply(sm -> (StorageMetadata)sm )).collect(Collectors.toList()))
+                            .allOf(contents.stream()
+                                    .map(md -> loadStorageMetadata(md).thenApply(sm -> (StorageMetadata) sm))
+                                    .collect(Collectors.toList()))
                             .thenApply(sm -> sm.stream().filter(e -> e != null)
                                     .collect(Collectors.toCollection(TreeSet::new)))
                             .thenApply(sm -> new PageSetImpl<StorageMetadata>(sm, contents.getNextMarker()));
@@ -762,6 +775,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
             // Write the file metadata
             final ExternalBlobMetadata md = new ExternalBlobMetadata(container, key,
                     uploadedFile.fileId(),
+                    targetFolderId,
                     StorageType.BLOB,
                     options.getBlobAccess(),
                     ds.getHashes().withBuildin(uploadedFile.hash()),
@@ -776,7 +790,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public String copyBlob(final String fromContainer, final String fromName, final String toContainer, final String toName,
+    public String copyBlob(final String fromContainer, final String fromName, final String toContainer,
+            final String toName,
             final CopyOptions options) {
         assertContainerExists(fromContainer);
         assertBlobExists(fromContainer, fromName);
@@ -829,7 +844,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                 .join();
                         if (srcMetadata != null) {
                             final ExternalBlobMetadata trgtMetadata = new ExternalBlobMetadata(toContainer, toName,
-                                    result.asFile().fileId(), StorageType.BLOB, srcMetadata.access(),
+                                    result.asFile().fileId(), result.parentFolderId(), StorageType.BLOB,
+                                    srcMetadata.access(),
                                     srcMetadata.hashes().withBuildin(result.asFile().hash()),
                                     srcMetadata.customMetadata());
                             this.metadataStrategy.put(toContainer, toName, trgtMetadata).join();
@@ -866,7 +882,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param options   {@link GetOptions} to apply
      * @return {@link Blob} found or null, if blob does not exist.
      */
-    private Blob getDirectoryBlob(final String container, final String name, final ExternalBlobMetadata metadata, final GetOptions options) {
+    private Blob getDirectoryBlob(final String container, final String name, final ExternalBlobMetadata metadata,
+            final GetOptions options) {
         LOGGER.info("Get directory blob {}/{} with options {}", container, name, options);
 
         final RemoteFolder remoteFile = PCloudUtils
@@ -986,7 +1003,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
      * @param name      Name of the blob
      * @return Success of the operation
      */
-    private CompletableFuture<Boolean> removeBlobWithMetadata(final String container, final String name) {
+    private CompletableFuture<Boolean> removeBlobWithMetadata(@Nonnull final String container, final String name) {
         final CompletableFuture<Boolean> deleteJob = this.metadataStrategy.get(container, name)
                 .thenCompose(md -> {
                     if (md == null) {
@@ -1003,7 +1020,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                                 : CompletableFuture.completedFuture(r))
                                 .thenCompose(r -> {
                                     if (r) {
-                                        // Remote metadata of files inside the folder
+                                        // Remove metadata of files inside the folder
                                         return this.metadataStrategy
                                                 .list(container,
                                                         ListContainerOptions.Builder.recursive().prefix(name))
@@ -1016,7 +1033,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                     } else {
                                         return CompletableFuture.completedFuture(r);
                                     }
-                                });
+                                })
+                                .thenCompose(r -> r ? removeFolderIfEmpty(md.folderId())
+                                        : CompletableFuture.completedFuture(r));
                     }
                     if (md.storageType() == StorageType.CONTAINER) {
                         return CompletableFuture.supplyAsync(() -> {
@@ -1028,10 +1047,45 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                         return PCloudUtils.execute(this.getApiClient().deleteFile(md.fileId()))
                                 .thenCompose(
                                         r -> r ? this.metadataStrategy.delete(container, name).thenApply(v -> r)
-                                                : CompletableFuture.completedFuture(r));
+                                                : CompletableFuture.completedFuture(r))
+                                .thenCompose(r -> r ? removeFolderIfEmpty(md.folderId())
+                                        : CompletableFuture.completedFuture(r));
+
                     }
                 });
         return deleteJob;
+    }
+
+    /**
+     * If the folder of the given file is empty, remove it and all empty parent
+     * folders.
+     * 
+     * @param folderId Id of the folder to check for emptiness
+     * @return Success of the operation
+     */
+    private CompletableFuture<Boolean> removeFolderIfEmpty(Long folderId) {
+        if (folderId == null || folderId == 0 || folderId == baseFolderId) {
+            // No need to remove the base folder
+            return CompletableFuture.completedFuture(true);
+        }
+
+        return PCloudUtils.execute(this.getApiClient().loadFolder(folderId)).thenCompose(rf -> {
+            if (rf.parentFolderId() == 0 || rf.parentFolderId() == baseFolderId) {
+                // Parent folder is the base folder -> empty containers are not removed!
+                return CompletableFuture.completedFuture(true);
+            }
+            if (rf.children().isEmpty()) {
+                // TODO delete metadata
+                // Deletes this folder and recursively all parent folders if empty, too
+                return PCloudUtils.execute(this.getApiClient().deleteFolder(folderId))
+                        .thenCompose(
+                                r -> r ? removeFolderIfEmpty(rf.parentFolderId())
+                                        : CompletableFuture.completedFuture(r));
+            }
+            // Folder not empty, no need to remove it
+            return CompletableFuture.completedFuture(true);
+        });
+
     }
 
     @Override
@@ -1089,6 +1143,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         if (readMetadata.isPresent() && readMetadata.get().access() != access) {
             final ExternalBlobMetadata oldMd = readMetadata.get();
             final ExternalBlobMetadata newMd = new ExternalBlobMetadata(oldMd.container(), oldMd.key(), oldMd.fileId(),
+                    oldMd.folderId(),
                     oldMd.storageType(),
                     access, oldMd.hashes(), oldMd.customMetadata());
             this.metadataStrategy.put(container, name, newMd).join();
@@ -1116,7 +1171,8 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     @Override
-    public MultipartUpload initiateMultipartUpload(final String container, final BlobMetadata blobMetadata, final PutOptions options) {
+    public MultipartUpload initiateMultipartUpload(final String container, final BlobMetadata blobMetadata,
+            final PutOptions options) {
 
         assertContainerExists(container);
         final String uploadId = UUID.randomUUID().toString();

@@ -258,7 +258,8 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
         // Then rename the target file to its final file name.
         return PCloudUtils.execute(this.apiClient.renameFile(temporaryFileId, blobName)) //
                 .thenCompose(remoteFile -> {
-                    LOGGER.info("Renamed multipart temporary file {} to {} within folder {} (=> {})", temporaryFileName, blobName, folderId(), this.blobMetadata.getName());
+                    LOGGER.info("Renamed multipart temporary file {} to {} within folder {} (=> {})", temporaryFileName,
+                            blobName, folderId(), this.blobMetadata.getName());
                     LOGGER.debug("Received the final checksum from the backend: {}", remoteFile.hash());
                     // Upload metadata
                     // Warning: Sometimes the build-in hash of the remotefile changes after some
@@ -268,6 +269,7 @@ public class PCloudMultipartUploadImpl extends PCloudMultipartUpload {
                             this.containerName(),
                             this.blobMetadata.getName(),
                             remoteFile.fileId(),
+                            folderId,
                             StorageType.BLOB,
                             BlobAccess.PRIVATE,
                             hashes,
