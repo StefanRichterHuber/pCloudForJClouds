@@ -62,6 +62,12 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     private long fileId;
 
     /**
+     * Folder id of the folder containing the blob
+     */
+    @Expose
+    private Long folderId;
+
+    /**
      * Access type (public / private)
      */
     @Expose
@@ -73,7 +79,7 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
     @Expose
     private StorageType storageType;
 
-    public ExternalBlobMetadata(@Nonnull String container, String key, long id, StorageType storageType,
+    public ExternalBlobMetadata(@Nonnull String container, String key, long id, Long folderId, StorageType storageType,
             BlobAccess access,
             BlobHashes hashes,
             Map<String, String> customMetadata) {
@@ -85,6 +91,7 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
         this.fileId = id;
         this.access = access;
         this.storageType = storageType;
+        this.folderId = folderId;
     }
 
     public BlobHashes hashes() {
@@ -107,6 +114,10 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
 
     public long fileId() {
         return this.fileId;
+    }
+
+    public Long folderId() {
+        return this.folderId;
     }
 
     public BlobAccess access() {
@@ -171,7 +182,7 @@ public class ExternalBlobMetadata implements Comparable<ExternalBlobMetadata> {
         if (md != null) {
             // For older data, sometimes the storage type is missing, set to default
             if (md.storageType() == null) {
-                md = new ExternalBlobMetadata(md.container(), md.key(), md.fileId(), StorageType.BLOB,
+                md = new ExternalBlobMetadata(md.container(), md.key(), md.fileId(), null, StorageType.BLOB,
                         md.access(), md.hashes(), md.customMetadata());
             }
         }

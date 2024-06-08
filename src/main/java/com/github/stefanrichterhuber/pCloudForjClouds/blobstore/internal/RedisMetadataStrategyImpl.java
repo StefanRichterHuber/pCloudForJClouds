@@ -442,7 +442,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * an existing file or use the factory to create the metadata.
      */
     @Override
-    public CompletableFuture<ExternalBlobMetadata> getOrCreate(@Nonnull final String container, @Nullable final String key,
+    public CompletableFuture<ExternalBlobMetadata> getOrCreate(@Nonnull final String container,
+            @Nullable final String key,
             @Nullable final BiFunction<String, String, CompletableFuture<ExternalBlobMetadata>> factory) {
 
         return this.getFromCache(container, key)
@@ -474,6 +475,37 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
     }
 
     /**
+     * This is a workaround for the fact that in previous versions, the folder id of
+     * a blob was not stored in the metadata. So we silently restore this
+     * information, if not present.
+     */
+    private CompletableFuture<ExternalBlobMetadata> upgradeMetadata(ExternalBlobMetadata md) {
+        if (md == null || md.folderId() != null || md.fileId() == 0) {
+            return CompletableFuture.completedFuture(md);
+        }
+
+        if (md.storageType() == StorageType.BLOB) {
+            return PCloudUtils.execute(this.apiClient.loadFile(md.fileId())).thenCompose(rf -> {
+                final ExternalBlobMetadata r = new ExternalBlobMetadata(md.container(), md.key(), md.fileId(),
+                        rf.parentFolderId(), md.storageType(), md.access(), md.hashes(), md.customMetadata());
+                LOGGER.debug("Restored parent folder id {} for file id {} (of {}/{})", r.folderId(), r.fileId(),
+                        r.container(), r.key());
+                return putWithoutLock(md.container(), md.key(), r).thenApply(v -> r);
+            });
+
+        } else if (md.storageType() == StorageType.FOLDER || md.storageType() == StorageType.CONTAINER) {
+            return PCloudUtils.execute(this.apiClient.loadFolder(md.fileId())).thenCompose(rf -> {
+                final ExternalBlobMetadata r = new ExternalBlobMetadata(md.container(), md.key(), md.fileId(),
+                        rf.parentFolderId(), md.storageType(), md.access(), md.hashes(), md.customMetadata());
+                LOGGER.debug("Restored parent folder id {} for file id {} (of {}/{})", r.folderId(), r.fileId(),
+                        r.container(), r.key());
+                return putWithoutLock(md.container(), md.key(), r).thenApply(v -> r);
+            });
+        }
+        return CompletableFuture.completedFuture(md);
+    }
+
+    /**
      * Checks if the value exists, or creates if if not using the given factory.
      * This variant of the method does not perform a lock, so it could be used by
      * methods with prior lock.
@@ -491,14 +523,14 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                     if (ebm != null) {
                         // Data found in local cache
                         LOGGER.debug("Determined value {} for key {}/{} from cache", ebm, container, key);
-                        return CompletableFuture.completedFuture(ebm);
+                        return upgradeMetadata(ebm);
                     } else {
                         LOGGER.debug("Metadata for {}/{} not found locally ", container, key);
                         // Data not found in local cache, try remote metadata folder
                         return this.getFromRemote(container, key)
                                 .thenCompose(em -> {
                                     if (em != null) {
-                                        return CompletableFuture.completedFuture(em);
+                                        return upgradeMetadata(ebm);
                                     } else {
                                         if (factory != null) {
                                             return factory.apply(container, key)
@@ -552,7 +584,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link ExternalBlobMetadata} found or null
      */
-    private CompletableFuture<ExternalBlobMetadata> getFromRemote(@Nonnull final String container, @Nullable final String key) {
+    private CompletableFuture<ExternalBlobMetadata> getFromRemote(@Nonnull final String container,
+            @Nullable final String key) {
         if (active) {
             // Data not found in local cache, try remote metadata folder
             return this.getFromMetadataFolder(container, key)
@@ -574,7 +607,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                         }
                     });
         } else {
-            return CompletableFuture.completedFuture(new ExternalBlobMetadata(container, key, 0, null,
+            return CompletableFuture.completedFuture(new ExternalBlobMetadata(container, key, 0, null, null,
                     BlobAccess.PRIVATE, BlobHashes.empty(), Collections.emptyMap()));
         }
     }
@@ -586,7 +619,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link ExternalBlobMetadata} found or null
      */
-    private CompletableFuture<ExternalBlobMetadata> getFromCache(@Nonnull final String container, @Nullable final String key) {
+    private CompletableFuture<ExternalBlobMetadata> getFromCache(@Nonnull final String container,
+            @Nullable final String key) {
         final String k = getRedisKey(container, key);
         return this.getCache(container, key).getAsync(k)
                 .thenApply(v -> {
@@ -704,7 +738,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @param key       Key of the blob
      * @return {@link ExternalBlobMetadata} (if found)
      */
-    private CompletableFuture<ExternalBlobMetadata> restoreFromFile(@Nonnull final String container, @Nullable final String key) {
+    private CompletableFuture<ExternalBlobMetadata> restoreFromFile(@Nonnull final String container,
+            @Nullable final String key) {
         final String filename = createPath(container, key);
         if (key == null) {
             // This is a container blob
@@ -926,7 +961,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
      * @return {@link ExternalBlobMetadata} generated and stored in cache.
      */
     @Override
-    public CompletableFuture<ExternalBlobMetadata> restoreMetadata(@Nonnull final String container, @Nullable final String key,
+    public CompletableFuture<ExternalBlobMetadata> restoreMetadata(@Nonnull final String container,
+            @Nullable final String key,
             @Nonnull final BlobAccess blobAccess,
             @Nonnull final Map<String, String> usermetadata,
             @Nonnull final RemoteEntry entry) {
@@ -981,7 +1017,8 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                             }
                         })
                         .thenApply(
-                                blobHashes -> new ExternalBlobMetadata(container, key, file.fileId(), StorageType.BLOB,
+                                blobHashes -> new ExternalBlobMetadata(container, key, file.fileId(),
+                                        file.parentFolderId(), StorageType.BLOB,
                                         blobAccess, blobHashes.withBuildin(file.hash()), usermetadata)
 
                         )
@@ -991,6 +1028,7 @@ public class RedisMetadataStrategyImpl implements MetadataStrategy {
                 try {
                     final RemoteFolder folder = entry.asFolder();
                     final ExternalBlobMetadata metadata = new ExternalBlobMetadata(container, key, folder.folderId(),
+                            folder.parentFolderId(),
                             key != null ? StorageType.FOLDER : StorageType.CONTAINER, blobAccess, BlobHashes.empty(),
                             usermetadata);
 

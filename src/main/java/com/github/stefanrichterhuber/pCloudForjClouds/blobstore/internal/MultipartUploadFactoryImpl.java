@@ -5,6 +5,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import javax.annotation.Resource;
 import javax.inject.Inject;
 
+import org.jclouds.blobstore.BlobStore;
 import org.jclouds.blobstore.domain.BlobMetadata;
 import org.jclouds.blobstore.options.PutOptions;
 import org.jclouds.logging.Logger;
@@ -21,21 +22,27 @@ public class MultipartUploadFactoryImpl implements MultipartUploadFactory {
     private final ApiClient apiClient;
     private final PCloudFileOps fileOps;
     private final MetadataStrategy metadataStrategy;
+    private final BlobStore blobStore;
 
     @Inject
     protected MultipartUploadFactoryImpl(ApiClient apiClient, PCloudFileOps fileOps,
-            MetadataStrategy metadataStrategy) {
+            MetadataStrategy metadataStrategy, BlobStore blobStore) {
         this.apiClient = checkNotNull(apiClient, "PCloud api client");
         this.fileOps = checkNotNull(fileOps, "PCloud File ops client");
         this.metadataStrategy = checkNotNull(metadataStrategy, "Metadatastrategy");
+        this.blobStore = blobStore;
     }
 
     @Override
-    public PCloudMultipartUpload create(long folderId, String containerName, String blobName, String id,
+    public MultipartUploadLifecyle create(long folderId, String containerName, String blobName, String id,
             BlobMetadata blobMetadata, PutOptions putOptions) {
-        return new PCloudMultipartUploadImpl(this.apiClient, this.metadataStrategy, this.fileOps, folderId,
-                containerName, blobName, id,
-                blobMetadata, putOptions);
+
+        return new TemporaryFileMultipartUploadImpl(containerName, blobName, id, blobMetadata, putOptions, blobStore);
+
+        // return new PCloudMultipartUploadImpl(this.apiClient, this.metadataStrategy,
+        // this.fileOps, folderId,
+        // containerName, blobName, id,
+        // blobMetadata, putOptions);
     }
 
 }
