@@ -4,7 +4,7 @@ WORKDIR /build
 COPY . .
 RUN mvn clean install -DskipTests
 
-FROM openjdk:17-slim
+FROM eclipse-temurin:17-jdk
 
 RUN mkdir -p /opt/app && mkdir -p /opt/app/libs
 
