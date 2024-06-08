@@ -68,9 +68,9 @@ import org.slf4j.LoggerFactory;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.AbstractBlobStore;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.EmptyPayload;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.HashingBlobDataSource;
+import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.MultipartUploadLifecyle;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudBlobStoreException;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudError;
-import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudMultipartUpload;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.PCloudUtils;
 import com.github.stefanrichterhuber.pCloudForjClouds.blobstore.internal.RemoteFilePayload;
 import com.github.stefanrichterhuber.pCloudForjClouds.predicates.validators.PCloudBlobKeyValidator;
@@ -129,7 +129,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     /**
      * Currently active multipart uploads, grouped by the id of the upload
      */
-    private final Map<String, PCloudMultipartUpload> currentMultipartUploads = new ConcurrentHashMap<>();
+    private final Map<String, MultipartUploadLifecyle> currentMultipartUploads = new ConcurrentHashMap<>();
 
     @Inject
     protected PCloudBlobStore( //
@@ -547,6 +547,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
     @Override
     public boolean containerExists(final String container) {
+        checkNotNull(container);
         this.pCloudContainerNameValidator.validate(container);
         final ExternalBlobMetadata containerMetadata = this.metadataStrategy.get(container, null).join();
 
@@ -557,6 +558,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
     @Override
     public boolean createContainerInLocation(final Location location, final String container) {
+        checkNotNull(container, "container");
         LOGGER.info("Create container {} in location {}", container, location);
 
         this.pCloudContainerNameValidator.validate(container);
@@ -579,6 +581,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
     @Override
     public ContainerAccess getContainerAccess(final String container) {
+        checkNotNull(container, "container");
         this.pCloudContainerNameValidator.validate(container);
         final ExternalBlobMetadata blobMetadata = this.metadataStrategy.get(container, null).join();
         return blobMetadata != null
@@ -588,6 +591,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
     @Override
     public void setContainerAccess(final String container, final ContainerAccess access) {
+        checkNotNull(container, "container");
+        checkNotNull(access, "access");
+
         this.pCloudContainerNameValidator.validate(container);
 
         final ExternalBlobMetadata old = this.metadataStrategy.get(container, null).join();
@@ -1151,17 +1157,18 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     }
 
     /**
-     * Utility method to find the {@link PCloudMultipartUpload} implementation for a
+     * Utility method to find the {@link MultipartUploadLifecyle} implementation for
+     * a
      * given {@link MultipartUpload} instance
      * 
      * @param mpu
      * @return
      */
-    private PCloudMultipartUpload resolveUpload(final MultipartUpload mpu) {
-        if (mpu instanceof PCloudMultipartUpload) {
-            return (PCloudMultipartUpload) mpu;
+    private MultipartUploadLifecyle resolveUpload(final MultipartUpload mpu) {
+        if (mpu instanceof MultipartUploadLifecyle) {
+            return (MultipartUploadLifecyle) mpu;
         } else {
-            final PCloudMultipartUpload pCloudMultipartUpload = this.currentMultipartUploads.get(mpu.id());
+            final MultipartUploadLifecyle pCloudMultipartUpload = this.currentMultipartUploads.get(mpu.id());
             if (pCloudMultipartUpload != null) {
                 return pCloudMultipartUpload;
             } else {
@@ -1185,11 +1192,11 @@ public final class PCloudBlobStore extends AbstractBlobStore {
 
         // Check if parent folder exists
         final long folderId = assureParentFolder(container, blobMetadata.getName()).join();
-        final PCloudMultipartUpload upload = this.multipartUploadFactory.create(folderId, container, name,
+        final MultipartUploadLifecyle upload = this.multipartUploadFactory.create(folderId, container, name,
                 uploadId, blobMetadata, options);
         upload.start();
         this.currentMultipartUploads.put(uploadId, upload);
-        return upload;
+        return upload.getUpload();
     }
 
     @Override
@@ -1210,11 +1217,7 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     @Override
     public MultipartPart uploadMultipartPart(final MultipartUpload mpu, final int partNumber, final Payload payload) {
         LOGGER.info("Upload part {} to multipart upload with id {}", partNumber, mpu.id());
-        try {
-            return resolveUpload(mpu).append(partNumber, payload).join();
-        } catch (final IOException e) {
-            throw new RuntimeException(e);
-        }
+        return resolveUpload(mpu).append(partNumber, payload).join();
     }
 
     @Override
@@ -1228,7 +1231,9 @@ public final class PCloudBlobStore extends AbstractBlobStore {
     public List<MultipartUpload> listMultipartUploads(final String container) {
 
         final List<MultipartUpload> result = new ArrayList<>(this.currentMultipartUploads.values().stream()
-                .filter(v -> v.containerName().equals(container)).collect(Collectors.toList()));
+                .map(MultipartUploadLifecyle::getUpload)
+                .filter(v -> v.containerName().equals(container))
+                .toList());
         if (result.size() > 0) {
             LOGGER.debug("Found active multipart uploads for container {}: {}", container, result);
         }

@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import org.apache.commons.io.IOUtils;
@@ -183,6 +184,77 @@ public class S3ProxyTest {
     }
 
     @Test
+    public void shouldDoS3MultipartIntoSubFolderWithHugeFile() throws Exception {
+        int chunkSize = 134217728;
+        int chunks = 5;
+        List<byte[]> contents = new ArrayList<>(chunks);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(chunks * chunkSize);
+        for (int i = 0; i < chunks; i++) {
+            byte[] content = new byte[chunkSize];
+            for (int j = 0; j < chunkSize; j++) {
+                content[j] = (byte) (Math.random() * 255.0);
+            }
+            baos.write(content);
+            contents.add(content);
+        }
+        byte[] content = baos.toByteArray();
+
+        String bucket = UUID.randomUUID().toString();
+        String key = "testfolder/" + UUID.randomUUID().toString();
+
+        Map<String, String> md = new HashMap<>();
+        md.put("Usermetadata1", "user meta data value1");
+
+        s3Client.createBucket(bucket);
+
+        LOGGER.info("Uploading to key {} to bucket", key, bucket);
+
+        ObjectMetadata omd = new ObjectMetadata();
+        omd.setUserMetadata(md);
+        InitiateMultipartUploadResult initiateMultipartUpload = s3Client
+                .initiateMultipartUpload(new InitiateMultipartUploadRequest(bucket, key, omd) //
+                        .withObjectMetadata(omd));
+
+        List<CompletableFuture<UploadPartResult>> jobs = new ArrayList<>();
+        for (int i = 0; i < contents.size(); i++) {
+
+            int j = i;
+            var req = CompletableFuture.supplyAsync(() -> {
+
+                UploadPartResult part = s3Client.uploadPart(new UploadPartRequest() //
+                        .withBucketName(bucket) //
+                        .withKey("key" + j).withUploadId(initiateMultipartUpload.getUploadId()) //
+                        .withInputStream(new ByteArrayInputStream(contents.get(j))) //
+                        .withPartSize(contents.get(j).length).withPartNumber(j + 1));
+                return part;
+            });
+
+            jobs.add(req);
+        }
+
+        List<PartETag> partEtags = jobs.stream().map(CompletableFuture::join).map(UploadPartResult::getPartETag)
+                .collect(Collectors.toList());
+
+        s3Client.completeMultipartUpload(
+                new CompleteMultipartUploadRequest().withUploadId(initiateMultipartUpload.getUploadId())
+                        .withBucketName(bucket).withKey("final").withPartETags(partEtags));
+
+        Thread.sleep(5000);
+
+        // Download and check
+        S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucket, key));
+        try (InputStream inputStream = s3Object.getObjectContent()) {
+            byte[] resultArray = IOUtils.toByteArray(inputStream);
+            assertEquals(content.length, resultArray.length);
+            Assert.assertArrayEquals(content, resultArray);
+        }
+        assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
+
+        s3Client.deleteObject(new DeleteObjectRequest(bucket, key));
+        s3Client.deleteBucket(bucket);
+    }
+
+    @Test
     public void shouldDoS3MultipartIntoSubFolder() throws Exception {
         // Create 2 parts with 6M (must be at least 5M) of random content each - yeah
         // its
@@ -243,7 +315,6 @@ public class S3ProxyTest {
         assertEquals(md, s3Object.getObjectMetadata().getUserMetadata());
 
         s3Client.deleteObject(new DeleteObjectRequest(bucket, key));
-        s3Client.deleteObject(new DeleteObjectRequest(bucket, "testfolder"));
         s3Client.deleteBucket(bucket);
     }
 
