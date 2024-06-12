@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
@@ -1013,10 +1014,13 @@ public final class PCloudBlobStore extends AbstractBlobStore {
         final CompletableFuture<Boolean> deleteJob = this.metadataStrategy.get(container, name)
                 .thenCompose(md -> {
                     if (md == null) {
+                        LOGGER.warn("Requested to delete Blob {}{}{}, but no metadata found!", container, SEPARATOR,
+                                name);
                         // File / Folder does not exists
                         return CompletableFuture.completedFuture(false);
                     }
                     if (md.storageType() == StorageType.FOLDER) {
+                        LOGGER.info("Requested to delete blob folder {}{}{}.", container, SEPARATOR, name);
                         // This is a folder. Remove the folder, the cached data of the folder and
                         // folders within the folder and metadata of the folder and blobs within the
                         // folder
@@ -1044,22 +1048,38 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                                         : CompletableFuture.completedFuture(r));
                     }
                     if (md.storageType() == StorageType.CONTAINER) {
+                        LOGGER.info("Requested to delete container {}.", name);
                         return CompletableFuture.supplyAsync(() -> {
                             this.deleteContainer(name);
                             return true;
                         });
                     } else {
+                        LOGGER.info("Requested to delete blob {}{}{}.", container, SEPARATOR, name);
                         // This is a file. Simply remove the file and its metadata
                         return PCloudUtils.execute(this.getApiClient().deleteFile(md.fileId()))
-                                .thenCompose(
-                                        r -> r ? this.metadataStrategy.delete(container, name).thenApply(v -> r)
-                                                : CompletableFuture.completedFuture(r))
-                                .thenCompose(r -> r ? removeFolderIfEmpty(md.folderId())
-                                        : CompletableFuture.completedFuture(r));
+                                .thenCompose(r -> {
+                                    if (r) {
+                                        LOGGER.info("Successfully deleted blob {}{}{}", container, SEPARATOR, name);
+                                        return this.metadataStrategy.delete(container, name).thenApply(v -> r);
+                                    } else {
+                                        LOGGER.warn("Failed to delete blob {}{}{}", container, SEPARATOR, name);
+                                        return CompletableFuture.completedFuture(r);
+                                    }
+                                })
+                                .thenCompose(r -> {
+                                    if (r) {
+                                        LOGGER.info("Successfully deleted blob metadata {}{}{}", container, SEPARATOR,
+                                                name);
+                                        return removeFolderIfEmpty(md.folderId());
+                                    } else {
+                                        return CompletableFuture.completedFuture(r);
+                                    }
+                                });
 
                     }
                 });
         return deleteJob;
+
     }
 
     /**
@@ -1081,17 +1101,42 @@ public final class PCloudBlobStore extends AbstractBlobStore {
                 return CompletableFuture.completedFuture(true);
             }
             if (rf.children().isEmpty()) {
+                LOGGER.debug("Folder {} (id {}) is empty. Delete it!", rf.name(), rf.id());
+
                 // TODO delete metadata
                 // Deletes this folder and recursively all parent folders if empty, too
                 return PCloudUtils.execute(this.getApiClient().deleteFolder(folderId))
-                        .thenCompose(
-                                r -> r ? removeFolderIfEmpty(rf.parentFolderId())
-                                        : CompletableFuture.completedFuture(r));
+                        .thenCompose(r -> {
+                            if (r) {
+                                LOGGER.debug("Successfully deleted folder '{}' (id {})", rf.name(), rf.id());
+                                return removeFolderIfEmpty(rf.parentFolderId());
+                            } else {
+                                LOGGER.warn("Failed to delete folder '{}' (id {})", rf.name(), rf.id());
+                                return CompletableFuture.completedFuture(r);
+                            }
+                        });
             }
             // Folder not empty, no need to remove it
             return CompletableFuture.completedFuture(true);
-        });
+        }).exceptionally(ex -> {
+            if (ex instanceof CompletionException) {
+                if (ex.getCause() instanceof ApiError) {
+                    if (((ApiError) ex.getCause()).errorCode() == 2006) {
+                        LOGGER.debug(
+                                "Tried to delete folder with id {}, which seemed to be empty, but was not empty (yet): Ignore",
+                                folderId);
+                        return true;
+                    }
+                    if (((ApiError) ex.getCause()).errorCode() == 2005) {
+                        LOGGER.debug("Tried to fetch contents of a folder which was already deleted: Ignore");
+                        return true;
 
+                    }
+                }
+            }
+            LOGGER.error("Failed to load folder with id {} to check for deletion: {}", folderId, ex);
+            return false;
+        });
     }
 
     @Override
